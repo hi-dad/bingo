@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bingo",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+
+  // Games, pools, boards and marks. Create the database once with
+  //   npx wrangler d1 create bingo
+  // and paste its id here, then: npm run db:remote
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bingo",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ],
+
+  // Public identifiers (not secrets). Fill in once the Apple and Google apps exist.
+  "vars": {
+    "APPLE_TEAM_ID": "",
+    "APPLE_BUNDLE_ID": "",
+    "GOOGLE_WEB_CLIENT_ID": "",
+    "GOOGLE_IOS_CLIENT_ID": "",
+    "APP_STORE_URL": ""
+  },
+
+  // Invite links (https://<domain>/join/CODE) need a real domain for universal links:
+  // "routes": [{ "pattern": "example.com", "custom_domain": true }],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true }
+}
