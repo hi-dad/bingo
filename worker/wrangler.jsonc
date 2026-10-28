@@ -4,14 +4,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
 
-  // Games, pools, boards and marks. Create the database once with
-  //   npx wrangler d1 create bingo
-  // and paste its id here, then: npm run db:remote
+  // Games, pools, boards, marks, reports. Schema changes: npm run db:remote
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "bingo",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "b6a98e02-9a16-4803-8a09-5141d45c8eb4"
     }
   ],
 

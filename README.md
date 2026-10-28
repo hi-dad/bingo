@@ -45,7 +45,21 @@ In development builds, the sign-in screen shows a **Developer sign-in** (any nam
 ## Before the first real release
 Fill in these placeholders. Search for `example.com` and `REPLACE_WITH`.
 - `app.json`: the app name, `ios.bundleIdentifier`, `associatedDomains` (`applinks:<domain>`), `extra.apiUrl`, `extra.googleWebClientId`, `extra.googleIosClientId`, `extra.eas.projectId` (`npx eas-cli init`), and the Google plugin's `iosUrlScheme` (the reversed iOS client ID).
-- `worker/wrangler.jsonc`: the D1 `database_id` (`npx wrangler d1 create bingo`), `APPLE_TEAM_ID`, `APPLE_BUNDLE_ID`, the Google client IDs, `APP_STORE_URL`, and a custom-domain route for invite links. Then run `npm --prefix worker run db:remote` and `npm --prefix worker run deploy`.
+- `worker/wrangler.jsonc`: `APPLE_TEAM_ID`, `APPLE_BUNDLE_ID`, the Google client IDs, `APP_STORE_URL`, and a custom-domain route for invite links. The D1 database `bingo` already exists with its tables. Deploy with `npx wrangler login` once, then `npm --prefix worker run deploy`.
+- `worker/src/index.ts`: `REPLACE_WITH_SUPPORT_EMAIL` on the terms page (Apple wants a way to reach you about reports).
 - Apple Developer: an App ID with **Sign in with Apple** and **Push Notifications**. Upload an APNs key to Expo (EAS sets this up when it asks during `eas build`).
 - Google Cloud: an iOS OAuth client and a Web OAuth client. The Worker accepts tokens for either.
-- App Store Connect: the privacy policy URL is `https://<domain>/privacy`. Account deletion is in Settings, as Apple requires.
+- App Store Connect: the privacy policy URL is `https://<domain>/privacy` and terms are at `/terms`. Account deletion is in Settings, as Apple requires.
+
+## Keeping it friendly (App Store rule 1.2)
+Friends write about each other, which Apple treats as user-generated content. The app has:
+- a filter that refuses slurs and "kill yourself" style lines, names and game names (`worker/src/filter.ts`)
+- **Report** on any line (⚑ in pools, press and hold on a board): hidden for everyone at once
+- **People** screen: leave, remove (owner), block; blocked people are listed in Settings
+- terms everyone agrees to at sign-in
+
+Review reports (Apple expects action within 24 hours):
+```
+npx wrangler d1 execute bingo --remote --command "SELECT created_at, reporter, author, text, reason FROM reports WHERE resolved = 0"
+npx wrangler d1 execute bingo --remote --command "UPDATE reports SET resolved = 1 WHERE id = '<id>'"
+```
