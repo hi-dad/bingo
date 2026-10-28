@@ -30,6 +30,7 @@ export default function JoinFromLink() {
         <Heading>You’re invited to a bingo game 🎲</Heading>
         <Muted>Sign in to join. Your friends will write a board about you, and you’ll never see it.</Muted>
         <SignInButtons />
+        <Muted style={{ fontSize: 13, textAlign: 'center' }}>By continuing you agree to the terms: no hateful or hurtful lines.</Muted>
       </ScrollView>
     );
   }

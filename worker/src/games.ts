@@ -5,6 +5,7 @@ import type { Env } from './env';
 import type { Board, GameSummary, GameView, Phrase, Player, Progress, Score, Square } from '../../shared/types';
 import { CODE_ALPHABET, MAX_PHRASE, bestLine, deal, freePos, hasBingo, isBlackout, isSize, phrasesNeeded, type Size } from '../../shared/logic';
 import { pushTo, type Push } from './push';
+import { NOT_ALLOWED, isHateful } from './filter';
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -14,6 +15,7 @@ export class HttpError extends Error {
 
 const MAX_NAME = 40;
 const MAX_POOL = 60; // phrases per person per game
+const REMOVED = 'Removed after a report';
 
 interface GameRow { id: string; code: string; name: string; owner: string; status: 'writing' | 'playing'; size: number; created_at: number }
 interface MemberRow { id: string; game_id: string; email: string; joined_at: number }
@@ -37,6 +39,7 @@ function cleanText(text: unknown, max: number): string {
 export async function createGame(env: Env, email: string, body: { name?: unknown; size?: unknown }): Promise<{ id: string }> {
   const name = cleanText(body.name, MAX_NAME);
   if (!name) throw new HttpError(400, 'Give the game a name');
+  if (isHateful(name)) throw new HttpError(400, NOT_ALLOWED);
   const size = body.size === undefined ? 5 : Number(body.size);
   if (!isSize(size)) throw new HttpError(400, 'Boards are 3×3, 4×4 or 5×5');
   const gameId = id();
@@ -70,6 +73,17 @@ export async function listGames(env: Env, email: string): Promise<GameSummary[]>
 export async function joinGame(env: Env, email: string, code: string): Promise<{ id: string }> {
   const game = await env.DB.prepare('SELECT id FROM games WHERE code = ?').bind(code.toUpperCase()).first<{ id: string }>();
   if (!game) throw new HttpError(404, 'No game with that code');
+  // Removed from this game, or blocked by (or blocking) someone in it: no way in. The
+  // message doesn't say which, so nobody learns who blocked them.
+  const barred = await env.DB.prepare(
+    `SELECT 1 FROM bans WHERE game_id = ?1 AND email = ?2
+     UNION ALL
+     SELECT 1 FROM blocks b JOIN members m ON m.game_id = ?1
+      WHERE (b.blocker = m.email AND b.blocked = ?2) OR (b.blocker = ?2 AND b.blocked = m.email)
+     LIMIT 1`,
+  ).bind(game.id, email).first();
+  const already = await env.DB.prepare('SELECT 1 FROM members WHERE game_id = ? AND email = ?').bind(game.id, email).first();
+  if (barred && !already) throw new HttpError(403, 'You can’t join this game');
   await env.DB.prepare('INSERT INTO members (id, game_id, email, joined_at) VALUES (?, ?, ?, ?) ON CONFLICT (game_id, email) DO NOTHING')
     .bind(id(), game.id, email, Date.now()).run();
   return { id: game.id };
@@ -88,9 +102,9 @@ export async function membership(env: Env, gameId: string, email: string): Promi
 // ---------- the view of a game for one person ----------
 
 interface SquareRow {
-  id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null;
+  id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null; phrase_id: string | null;
   board_id: string; target: string; bingo_at: number | null; blackout_at: number | null;
-  text: string | null; author: string | null;
+  text: string | null; author: string | null; removed: number | null;
 }
 
 export async function gameView(env: Env, gameId: string, email: string): Promise<GameView> {
@@ -101,17 +115,17 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
       `SELECT m.id, m.joined_at, u.name FROM members m LEFT JOIN users u ON u.email = m.email
         WHERE m.game_id = ? ORDER BY m.joined_at`,
     ).bind(gameId).all<{ id: string; joined_at: number; name: string | null }>(),
-    env.DB.prepare('SELECT target, COUNT(*) AS n FROM phrases WHERE game_id = ? GROUP BY target')
+    env.DB.prepare('SELECT target, COUNT(*) AS n FROM phrases WHERE game_id = ? AND removed = 0 GROUP BY target')
       .bind(gameId).all<{ target: string; n: number }>(),
     // Never the asker's own pool.
     game.status === 'writing'
-      ? env.DB.prepare('SELECT id, target, author, text FROM phrases WHERE game_id = ? AND target != ? ORDER BY created_at')
+      ? env.DB.prepare('SELECT id, target, author, text FROM phrases WHERE game_id = ? AND target != ? AND removed = 0 ORDER BY created_at')
         .bind(gameId, me.id).all<{ id: string; target: string; author: string | null; text: string }>()
       : null,
     game.status === 'playing'
       ? env.DB.prepare(
-        `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, b.id AS board_id, b.target, b.bingo_at, b.blackout_at,
-                p.text, p.author
+        `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, s.phrase_id, b.id AS board_id, b.target, b.bingo_at, b.blackout_at,
+                p.text, p.author, p.removed
            FROM boards b JOIN squares s ON s.board_id = b.id LEFT JOIN phrases p ON p.id = s.phrase_id
           WHERE b.game_id = ? ORDER BY s.pos`,
       ).bind(gameId).all<SquareRow>()
@@ -166,7 +180,8 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
       squares: rows.map((r): Square => ({
         id: r.id,
         pos: r.pos,
-        text: r.free ? null : r.text,
+        text: r.free ? null : r.removed ? REMOVED : r.text,
+        phraseId: r.free || r.removed ? null : r.phrase_id,
         free: !!r.free,
         markedAt: r.marked_at,
         markedBy: r.marked_by ? names.get(r.marked_by) ?? null : null,
@@ -219,7 +234,8 @@ export async function addPhrase(env: Env, gameId: string, email: string, body: {
   if (!member) throw new HttpError(404, 'That person isn’t in this game');
   const text = cleanText(body.text, MAX_PHRASE);
   if (!text) throw new HttpError(400, 'Write something they say');
-  const { results } = await env.DB.prepare('SELECT text FROM phrases WHERE game_id = ? AND target = ?')
+  if (isHateful(text)) throw new HttpError(400, NOT_ALLOWED);
+  const { results } = await env.DB.prepare('SELECT text FROM phrases WHERE game_id = ? AND target = ? AND removed = 0')
     .bind(gameId, target).all<{ text: string }>();
   if (results.length >= MAX_POOL) throw new HttpError(409, 'That list is full');
   if (results.some((r) => r.text.toLowerCase() === text.toLowerCase())) throw new HttpError(409, 'Someone already wrote that one');
@@ -248,7 +264,7 @@ export async function startGame(env: Env, gameId: string, email: string, body: {
 
   const [members, phrases] = await Promise.all([
     env.DB.prepare('SELECT id, email FROM members WHERE game_id = ?').bind(gameId).all<{ id: string; email: string }>(),
-    env.DB.prepare('SELECT id, target FROM phrases WHERE game_id = ?').bind(gameId).all<{ id: string; target: string }>(),
+    env.DB.prepare('SELECT id, target FROM phrases WHERE game_id = ? AND removed = 0').bind(gameId).all<{ id: string; target: string }>(),
   ]);
   if (members.results.length < 2) throw new HttpError(409, 'Invite at least one friend first');
   const needed = phrasesNeeded(size);
@@ -359,9 +375,9 @@ export async function ownBoard(env: Env, gameId: string, email: string): Promise
   const view = await gameView(env, gameId, email);
   const names = new Map(view.players.map((p) => [p.id, p.name]));
   const { results } = await env.DB.prepare(
-    `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, p.text, p.author
+    `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, s.phrase_id, p.text, p.author, p.removed
        FROM squares s LEFT JOIN phrases p ON p.id = s.phrase_id WHERE s.board_id = ? ORDER BY s.pos`,
-  ).bind(board.id).all<{ id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null; text: string | null; author: string | null }>();
+  ).bind(board.id).all<{ id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null; phrase_id: string | null; text: string | null; author: string | null; removed: number | null }>();
   return {
     target: me.id,
     bingoAt: board.bingo_at,
@@ -369,7 +385,8 @@ export async function ownBoard(env: Env, gameId: string, email: string): Promise
     squares: results.map((r) => ({
       id: r.id,
       pos: r.pos,
-      text: r.free ? null : r.text,
+      text: r.free ? null : r.removed ? REMOVED : r.text,
+      phraseId: null, // your own board: nothing to report
       free: !!r.free,
       markedAt: r.marked_at,
       markedBy: r.marked_by ? names.get(r.marked_by) ?? null : null,
@@ -382,34 +399,38 @@ export async function ownBoard(env: Env, gameId: string, email: string): Promise
 
 // ---------- account deletion ----------
 
-// Removes a person from every game. Their own pool and board go; lines they wrote about
-// friends and squares they crossed off stay (anonymous), so friends' boards keep working.
+// Statements that take one member out of their game. Their own pool and board go; lines
+// they wrote about friends and squares they crossed off stay (anonymous), so friends'
+// boards keep working. The game passes to whoever joined next, and a game nobody is left
+// in is deleted.
+export function leaveStatements(env: Env, m: { id: string; game_id: string }): D1PreparedStatement[] {
+  return [
+    env.DB.prepare('DELETE FROM squares WHERE board_id IN (SELECT id FROM boards WHERE target = ?)').bind(m.id),
+    env.DB.prepare('DELETE FROM boards WHERE target = ?').bind(m.id),
+    env.DB.prepare('DELETE FROM phrases WHERE target = ?').bind(m.id),
+    env.DB.prepare('UPDATE phrases SET author = NULL WHERE author = ?').bind(m.id),
+    env.DB.prepare('UPDATE squares SET marked_by = NULL WHERE marked_by = ?').bind(m.id),
+    env.DB.prepare('DELETE FROM members WHERE id = ?').bind(m.id),
+    env.DB.prepare(
+      `UPDATE games SET owner = COALESCE((SELECT id FROM members WHERE game_id = ?1 ORDER BY joined_at LIMIT 1), owner)
+        WHERE id = ?1 AND owner = ?2`,
+    ).bind(m.game_id, m.id),
+    env.DB.prepare('DELETE FROM squares WHERE board_id IN (SELECT id FROM boards WHERE game_id = ?1) AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
+    env.DB.prepare('DELETE FROM boards WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
+    env.DB.prepare('DELETE FROM phrases WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
+    env.DB.prepare('DELETE FROM bans WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
+    env.DB.prepare('DELETE FROM games WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
+  ];
+}
+
+// Removes a person from every game and forgets them.
 export async function deleteAccount(env: Env, email: string) {
   const { results: mine } = await env.DB.prepare('SELECT id, game_id FROM members WHERE email = ?').bind(email).all<{ id: string; game_id: string }>();
-  const stmts: D1PreparedStatement[] = [];
-  for (const m of mine) {
-    stmts.push(
-      env.DB.prepare('DELETE FROM squares WHERE board_id IN (SELECT id FROM boards WHERE target = ?)').bind(m.id),
-      env.DB.prepare('DELETE FROM boards WHERE target = ?').bind(m.id),
-      env.DB.prepare('DELETE FROM phrases WHERE target = ?').bind(m.id),
-      env.DB.prepare('UPDATE phrases SET author = NULL WHERE author = ?').bind(m.id),
-      env.DB.prepare('UPDATE squares SET marked_by = NULL WHERE marked_by = ?').bind(m.id),
-      env.DB.prepare('DELETE FROM members WHERE id = ?').bind(m.id),
-      // Hand the game to whoever joined next; a game nobody is left in is deleted.
-      env.DB.prepare(
-        `UPDATE games SET owner = COALESCE((SELECT id FROM members WHERE game_id = ?1 ORDER BY joined_at LIMIT 1), owner)
-          WHERE id = ?1 AND owner = ?2`,
-      ).bind(m.game_id, m.id),
-      env.DB.prepare('DELETE FROM squares WHERE board_id IN (SELECT id FROM boards WHERE game_id = ?1) AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
-      env.DB.prepare('DELETE FROM boards WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
-      env.DB.prepare('DELETE FROM phrases WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
-      env.DB.prepare('DELETE FROM games WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
-    );
-  }
-  stmts.push(
+  await env.DB.batch([
+    ...mine.flatMap((m) => leaveStatements(env, m)),
     env.DB.prepare('DELETE FROM sessions WHERE owner = ?').bind(email),
     env.DB.prepare('DELETE FROM devices WHERE email = ?').bind(email),
+    env.DB.prepare('DELETE FROM blocks WHERE blocker = ?1 OR blocked = ?1').bind(email),
     env.DB.prepare('DELETE FROM users WHERE email = ?').bind(email),
-  );
-  await env.DB.batch(stmts);
+  ]);
 }

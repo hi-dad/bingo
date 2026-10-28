@@ -4,6 +4,7 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
+import { confirmReport } from '@/report';
 import { MAX_PHRASE } from '@shared/logic';
 import { Button, ErrorText, Field, Muted, useUi, type InputRef } from '@/components/ui';
 import { makeStyles, radius, shadow, useTheme } from '@/theme';
@@ -66,6 +67,12 @@ export default function WriteAbout() {
               <Pressable hitSlop={10} accessibilityLabel={`Delete “${item.text}”`}
                 onPress={() => act(() => api.deletePhrase(item.id)).catch((err) => setProblem((err as Error).message))}>
                 <Text style={styles.delete}>✕</Text>
+              </Pressable>
+            ) : null}
+            {!item.mine ? (
+              <Pressable hitSlop={10} accessibilityLabel={`Report “${item.text}”`}
+                onPress={() => confirmReport(item.text, () => act(() => api.report(item.id)))}>
+                <Text style={styles.delete}>⚑</Text>
               </Pressable>
             ) : null}
           </View>

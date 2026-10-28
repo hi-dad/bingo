@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS phrases (
   target     TEXT    NOT NULL,
   author     TEXT,
   text       TEXT    NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  removed    INTEGER NOT NULL DEFAULT 0  -- 1 once reported: hidden everywhere
 );
 CREATE INDEX IF NOT EXISTS phrases_game ON phrases (game_id, target);
 
@@ -82,3 +83,36 @@ CREATE TABLE IF NOT EXISTS devices (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS devices_email ON devices (email);
+
+-- Lines people reported (App Store rule 1.2). A reported line is hidden right away; the
+-- report stays here for review: npx wrangler d1 execute bingo --remote --command
+-- "SELECT * FROM reports WHERE resolved = 0"
+CREATE TABLE IF NOT EXISTS reports (
+  id         TEXT    PRIMARY KEY,
+  phrase_id  TEXT    NOT NULL,
+  game_id    TEXT    NOT NULL,
+  reporter   TEXT    NOT NULL,  -- email
+  author     TEXT,              -- email of who wrote it, if still known
+  text       TEXT    NOT NULL,  -- the line as it was
+  reason     TEXT,
+  created_at INTEGER NOT NULL,
+  resolved   INTEGER NOT NULL DEFAULT 0
+);
+
+-- People the game's owner removed; they can't rejoin that game.
+CREATE TABLE IF NOT EXISTS bans (
+  game_id TEXT NOT NULL,
+  email   TEXT NOT NULL,
+  PRIMARY KEY (game_id, email)
+);
+
+-- Blocks between people: neither can join a game the other is in.
+CREATE TABLE IF NOT EXISTS blocks (
+  id         TEXT    PRIMARY KEY,
+  blocker    TEXT    NOT NULL,  -- email
+  blocked    TEXT    NOT NULL,  -- email
+  name       TEXT,              -- their name when blocked, for the Settings list
+  created_at INTEGER NOT NULL,
+  UNIQUE (blocker, blocked)
+);
+CREATE INDEX IF NOT EXISTS blocks_blocked ON blocks (blocked);

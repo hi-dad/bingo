@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import { api } from '@/api';
 import { useAuth } from '@/auth';
 import { API_URL } from '@/config';
 import { Button, Card, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui';
@@ -12,6 +14,18 @@ export default function Settings() {
   const [name, setName] = useState(auth.me?.name ?? '');
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState<{ id: string; name: string }[]>([]);
+
+  useFocusEffect(useCallback(() => { api.blocks().then(setBlocked).catch(() => {}); }, []));
+
+  async function unblock(b: { id: string; name: string }) {
+    try {
+      await api.unblock(b.id);
+      setBlocked((list) => list.filter((x) => x.id !== b.id));
+    } catch (err) {
+      Alert.alert('Couldn’t unblock', (err as Error).message);
+    }
+  }
 
   async function save() {
     try {
@@ -53,6 +67,17 @@ export default function Settings() {
         <ErrorText>{error}</ErrorText>
         <Button kind="secondary" title={saved ? 'Saved ✓' : 'Save name'} disabled={!name.trim() || name.trim() === auth.me?.name} onPress={save} />
       </Card>
+      {blocked.length ? (
+        <Card>
+          <Heading>Blocked</Heading>
+          {blocked.map((b) => (
+            <View key={b.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ flex: 1, fontSize: 16, color: t.ink }}>{b.name}</Text>
+              <Button kind="secondary" title="Unblock" onPress={() => unblock(b)} style={{ minHeight: 40 }} />
+            </View>
+          ))}
+        </Card>
+      ) : null}
       <Card>
         <Muted>Signed in as {auth.me?.email}</Muted>
         <Button kind="secondary" title="Sign out" onPress={auth.signOut} />

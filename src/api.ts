@@ -75,4 +75,12 @@ export const api = {
   start: (id: string, size: Size) => request<GameView>('POST', `/api/games/${id}/start`, { size }),
   mine: (id: string) => request<Board>('GET', `/api/games/${id}/mine`),
   mark: (squareId: string, on: boolean) => request<GameView>('POST', `/api/squares/${squareId}/${on ? 'mark' : 'unmark'}`),
+
+  // Keeping it friendly
+  report: (phraseId: string, reason?: string) => request<GameView>('POST', `/api/phrases/${phraseId}/report`, { reason }),
+  leave: (id: string) => request('POST', `/api/games/${id}/leave`),
+  remove: (id: string, player: string) => request<GameView>('POST', `/api/games/${id}/remove`, { player }),
+  block: (id: string, player: string) => request('POST', `/api/games/${id}/block`, { player }),
+  blocks: () => request<{ id: string; name: string }[]>('GET', '/api/blocks'),
+  unblock: (blockId: string) => request('DELETE', `/api/blocks/${blockId}`),
 };

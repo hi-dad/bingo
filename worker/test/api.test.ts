@@ -4,6 +4,7 @@ import worker from '../src/index';
 import type { Env } from '../src/env';
 import type { GameView } from '../../shared/types';
 import { testDb } from './d1';
+import { BLOCKLIST_B64 as BLOCKLIST } from '../src/blocklist';
 
 let env: Env;
 let pending: Promise<unknown>[];
@@ -286,4 +287,82 @@ test('universal links file lists the app', async () => {
   env.APPLE_BUNDLE_ID = 'app.bingo';
   const r = await call(null, 'GET', '/.well-known/apple-app-site-association');
   expect(r.data.applinks.details[0].appIDs).toEqual(['TEAM123.app.bingo']);
+});
+
+describe('keeping it friendly', () => {
+  const slur = atob(BLOCKLIST).split(',')[0];
+
+  test('hateful lines, names and game names are refused', async () => {
+    const g = await setUp();
+    const r = await call(g.ben, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: `always says ${slur}` });
+    expect(r.status).toBe(400);
+    expect(r.data.error).toMatch(/friendly/);
+    expect((await call(g.ben, 'PUT', '/api/me', { name: slur })).status).toBe(400);
+    expect((await call(g.ben, 'POST', '/api/games', { name: `${slur} club` })).status).toBe(400);
+  });
+
+  test('a reported line disappears for everyone and is kept for review', async () => {
+    const g = await setUp();
+    const line = (await view(g.cal, g.id)).pools[g.ids.ana].find((p) => !p.mine)!; // Ben's line about Ana
+    expect((await call(g.ana, 'POST', `/api/phrases/${line.id}/report`)).status).toBe(404); // Ana can't see it
+    expect((await call(g.ben, 'POST', `/api/phrases/${line.id}/report`)).status).toBe(400); // Ben wrote it
+    const r = await call(g.cal, 'POST', `/api/phrases/${line.id}/report`, { reason: 'mean' });
+    expect(r.status).toBe(200);
+    expect(r.text).not.toContain(line.text);
+    expect((await call(g.ben, 'GET', `/api/games/${g.id}`)).text).not.toContain(line.text);
+    // It no longer counts toward Ana's pool, so the deal waits for a replacement.
+    expect((await view(g.ana, g.id)).players.find((p) => p.isMe)!.poolCount).toBe(9);
+    expect((await call(g.ana, 'POST', `/api/games/${g.id}/start`)).status).toBe(200);
+    const report = await env.DB.prepare('SELECT reporter, author, text, reason FROM reports').first();
+    expect(report).toEqual({ reporter: 'cal@example.com', author: 'ben@example.com', text: line.text, reason: 'mean' });
+  });
+
+  test('a line reported mid-game shows as removed on the board', async () => {
+    const g = await setUp();
+    await call(g.ana, 'POST', `/api/games/${g.id}/start`);
+    const sq = (await view(g.ben, g.id)).boards[g.ids.ana].squares[0];
+    const phrase = await env.DB.prepare('SELECT phrase_id FROM squares WHERE id = ?').bind(sq.id).first<{ phrase_id: string }>();
+    const author = await env.DB.prepare('SELECT m.email FROM phrases p JOIN members m ON m.id = p.author WHERE p.id = ?').bind(phrase!.phrase_id).first<{ email: string }>();
+    const reporter = author!.email === 'ben@example.com' ? g.cal : g.ben;
+    const r = await call(reporter, 'POST', `/api/phrases/${phrase!.phrase_id}/report`);
+    expect(r.data.boards[g.ids.ana].squares[0].text).toBe('Removed after a report');
+    expect(r.text).not.toContain(sq.text!);
+  });
+
+  test('leaving a game takes you and your board out', async () => {
+    const g = await setUp();
+    expect((await call(g.cal, 'POST', `/api/games/${g.id}/leave`)).status).toBe(200);
+    expect((await call(g.cal, 'GET', `/api/games/${g.id}`)).status).toBe(404);
+    expect((await view(g.ana, g.id)).players.map((p) => p.name).sort()).toEqual(['Ana', 'Ben']);
+    // Leaving isn't a ban: the code still works.
+    expect((await call(g.cal, 'POST', `/api/join/${g.code}`)).status).toBe(200);
+  });
+
+  test('only the owner removes people, and removed people stay out', async () => {
+    const g = await setUp();
+    expect((await call(g.ben, 'POST', `/api/games/${g.id}/remove`, { player: g.ids.cal })).status).toBe(403);
+    expect((await call(g.ana, 'POST', `/api/games/${g.id}/remove`, { player: g.ids.ana })).status).toBe(400);
+    const r = await call(g.ana, 'POST', `/api/games/${g.id}/remove`, { player: g.ids.cal });
+    expect(r.data.players.map((p: { name: string }) => p.name).sort()).toEqual(['Ana', 'Ben']);
+    expect((await call(g.cal, 'POST', `/api/join/${g.code}`)).data.error).toMatch(/can’t join/);
+  });
+
+  test('blocking: you leave, and neither of you can join the other’s games', async () => {
+    const g = await setUp();
+    expect((await call(g.cal, 'POST', `/api/games/${g.id}/block`, { player: g.ids.ben })).status).toBe(200);
+    expect((await call(g.cal, 'GET', `/api/games/${g.id}`)).status).toBe(404);
+    expect((await call(g.cal, 'POST', `/api/join/${g.code}`)).status).toBe(403);
+    // Cal starts a new game: Ben can't get in, Ana can.
+    const { data: { id } } = await call(g.cal, 'POST', '/api/games', { name: 'No Ben' });
+    const { code } = await view(g.cal, id);
+    expect((await call(g.ben, 'POST', `/api/join/${code}`)).status).toBe(403);
+    expect((await call(g.ana, 'POST', `/api/join/${code}`)).status).toBe(200);
+    // Unblocking lets Ben in.
+    const blocks = (await call(g.cal, 'GET', '/api/blocks')).data;
+    expect(blocks).toEqual([{ id: expect.any(String), name: 'Ben' }]);
+    expect((await call(g.ben, 'DELETE', `/api/blocks/${blocks[0].id}`)).status).toBe(200); // not Ben's to undo
+    expect((await call(g.ben, 'POST', `/api/join/${code}`)).status).toBe(403);
+    await call(g.cal, 'DELETE', `/api/blocks/${blocks[0].id}`);
+    expect((await call(g.ben, 'POST', `/api/join/${code}`)).status).toBe(200);
+  });
 });

@@ -46,7 +46,14 @@ export default function GameHub() {
     <View style={ui.screen}>
       <Stack.Screen options={{
         title: game.name,
-        headerRight: () => <Pressable onPress={invite} hitSlop={12}><Text style={s.link}>Invite</Text></Pressable>,
+        headerRight: () => (
+          <View style={{ flexDirection: 'row', gap: 18, alignItems: 'center' }}>
+            <Pressable onPress={invite} hitSlop={10}><Text style={s.link}>Invite</Text></Pressable>
+            <Pressable onPress={() => router.push(`/game/${game.id}/players`)} hitSlop={10} accessibilityLabel="People in this game">
+              <Text style={s.link}>People</Text>
+            </Pressable>
+          </View>
+        ),
       }} />
       <ScrollView contentContainerStyle={ui.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
         <ErrorText>{error}</ErrorText>

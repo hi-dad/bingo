@@ -4,6 +4,7 @@ import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
+import { confirmReport } from '@/report';
 import { playerIndex } from '@/players';
 import type { Square } from '@shared/types';
 import { Avatar } from '@/components/Avatar';
@@ -72,9 +73,10 @@ export default function BoardScreen() {
           <ProgressRing done={progress.marked} total={progress.total} />
         </View>
         <ErrorText>{error}</ErrorText>
-        <BingoGrid size={game.size} squares={board.squares} pending={pending} onToggle={toggle} playerIndex={index} />
+        <BingoGrid size={game.size} squares={board.squares} pending={pending} onToggle={toggle} playerIndex={index}
+          onLongPress={(sq) => sq.phraseId && sq.text && confirmReport(sq.text, () => act(() => api.report(sq.phraseId!)))} />
         <Muted style={{ textAlign: 'center', fontSize: 13 }}>
-          {board.blackoutAt ? 'Writers are revealed ✍︎' : `Tap when ${person.name} says it · faces show who heard it first`}
+          {board.blackoutAt ? 'Writers are revealed ✍︎' : `Tap when ${person.name} says it · hold a square to report it`}
         </Muted>
         {others.length ? (
           <View style={{ gap: 8 }}>

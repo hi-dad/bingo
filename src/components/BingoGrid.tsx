@@ -7,11 +7,12 @@ import { Avatar } from './Avatar';
 // A board. `onToggle` makes it tappable; `pending` holds taps still on their way to the
 // server (shown right away). Each crossed-off square wears the face of whoever heard it
 // (`playerIndex` maps player ids to avatar colors). Writers show once a board is blacked out.
-export function BingoGrid({ size, squares, pending = {}, onToggle, playerIndex = {} }: {
+export function BingoGrid({ size, squares, pending = {}, onToggle, onLongPress, playerIndex = {} }: {
   size: Size;
   squares: Square[];
   pending?: Record<string, boolean>;
   onToggle?: (square: Square, on: boolean) => void;
+  onLongPress?: (square: Square) => void; // e.g. report the line
   playerIndex?: Record<string, number>;
 }) {
   const s = useStyles();
@@ -30,6 +31,8 @@ export function BingoGrid({ size, squares, pending = {}, onToggle, playerIndex =
               accessibilityLabel={sq.free ? 'Free square' : `${sq.text}${marked ? `, crossed off${by ? ` by ${by}` : ''}` : ''}`}
               disabled={!onToggle || sq.free}
               onPress={() => onToggle?.(sq, !marked)}
+              onLongPress={onLongPress && sq.phraseId ? () => onLongPress(sq) : undefined}
+              accessibilityHint={onLongPress && sq.phraseId ? 'Press and hold to report this line' : undefined}
               style={({ pressed }) => [
                 s.square,
                 marked && !sq.free && s.marked,

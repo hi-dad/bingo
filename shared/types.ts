@@ -43,6 +43,7 @@ export interface Square {
   id: string;
   pos: number;
   text: string | null; // null for the free square
+  phraseId: string | null; // to report the line
   free: boolean;
   markedAt: number | null;
   markedBy: string | null; // name of who crossed it off

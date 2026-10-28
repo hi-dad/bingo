@@ -16,6 +16,12 @@
 //   POST   /api/games/:id/phrases  -> { target, text } add a line to a friend's pool; returns GameView
 //   POST   /api/games/:id/start    -> { size? } deal the boards; returns GameView
 //   GET    /api/games/:id/mine     -> your own board, once it's blacked out
+//   POST   /api/games/:id/leave    -> leave the game
+//   POST   /api/games/:id/remove   -> { player } owner only: remove someone for good; returns GameView
+//   POST   /api/games/:id/block    -> { player } block them (and leave this game)
+//   GET    /api/blocks             -> [{ id, name }] people you've blocked
+//   DELETE /api/blocks/:id         -> unblock
+//   POST   /api/phrases/:id/report -> { reason? } hide a line and report it; returns GameView
 //   DELETE /api/phrases/:id        -> delete a line you wrote; returns GameView
 //   POST   /api/squares/:id/mark   -> cross off; returns GameView
 //   POST   /api/squares/:id/unmark -> undo; returns GameView
@@ -27,6 +33,8 @@ import type { Env } from './env';
 import { verifySignIn, createSession, sessionEmail, endSession, saveName, nameOf, cleanName } from './auth';
 import { HttpError, addPhrase, createGame, deleteAccount, deletePhrase, gameView, joinGame, listGames, ownBoard, setMark, startGame, type Later } from './games';
 import { EXPO_TOKEN } from './push';
+import { isHateful, NOT_ALLOWED } from './filter';
+import { blockPlayer, leaveGame, listBlocks, removePlayer, reportPhrase, unblock } from './safety';
 import { CODE } from '../../shared/logic';
 
 const ID = /^[0-9a-f-]{36}$/;
@@ -56,6 +64,7 @@ async function route(request: Request, env: Env, later: Later): Promise<Response
     return env.APP_STORE_URL ? Response.redirect(env.APP_STORE_URL, 302) : new Response('Get the app to join this game.', { status: 200 });
   }
   if (path === '/privacy') return new Response(PRIVACY, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+  if (path === '/terms') return new Response(TERMS, { headers: { 'content-type': 'text/html; charset=utf-8' } });
   if (!path.startsWith('/api/')) return json({ error: 'Not found' }, 404);
 
   const open = await publicApi(request, env, path);
@@ -81,7 +90,8 @@ async function publicApi(request: Request, env: Env, path: string): Promise<Resp
       : await verifySignIn(body.idToken, provider, env);
     if (!who) return json({ error: 'Sign-in failed' }, 401);
     // Apple only shares the name on someone's very first sign-in, from the app.
-    await saveName(env, who.email, who.name || (provider === 'apple' ? cleanName(body.name) : null));
+    const offered = who.name || (provider === 'apple' ? cleanName(body.name) : null);
+    await saveName(env, who.email, offered && !isHateful(offered) ? offered : null);
     const token = await createSession(env, who.email);
     return json({ token, email: who.email, name: await nameOf(env, who.email) });
   }
@@ -105,6 +115,7 @@ async function api(request: Request, env: Env, path: string, email: string, late
     if (method === 'PUT') {
       const name = cleanName((await readJson(request)).name);
       if (!name) return json({ error: 'Pick a name' }, 400);
+      if (isHateful(name)) return json({ error: NOT_ALLOWED }, 400);
       await saveName(env, email, name, true);
       return json({ email, name });
     }
@@ -136,6 +147,29 @@ async function api(request: Request, env: Env, path: string, email: string, late
       return json(await gameView(env, id, email));
     }
     if (action === 'mine' && method === 'GET') return json(await ownBoard(env, id, email));
+    if (action === 'leave' && method === 'POST') {
+      await leaveGame(env, id, email);
+      return json({ ok: true });
+    }
+    if (action === 'remove' && method === 'POST') {
+      await removePlayer(env, id, email, await readJson(request));
+      return json(await gameView(env, id, email));
+    }
+    if (action === 'block' && method === 'POST') {
+      await blockPlayer(env, id, email, await readJson(request));
+      return json({ ok: true });
+    }
+  }
+
+  if (kind === 'phrases' && id && action === 'report' && method === 'POST') {
+    const { gameId } = await reportPhrase(env, id, email, await readJson(request));
+    return json(await gameView(env, gameId, email));
+  }
+
+  if (kind === 'blocks' && !id && method === 'GET') return json(await listBlocks(env, email));
+  if (kind === 'blocks' && id && !action && method === 'DELETE') {
+    await unblock(env, id, email);
+    return json({ ok: true });
   }
 
   if (kind === 'phrases' && id && !action && method === 'DELETE') {
@@ -184,4 +218,19 @@ const PRIVACY = `<!doctype html><meta charset="utf-8"><meta name="viewport" cont
 <li>A push notification token for your device, so we can tell you when someone gets BINGO'd.</li>
 </ul>
 <p>Nothing is sold, shared with advertisers, or used for tracking. Data is stored with Cloudflare.</p>
+<p>If you report a line, we keep the line, who wrote it and who reported it, so we can review it.</p>
 <p>Delete your account any time in the app (Settings → Delete account). That removes you from every game, deletes your board, and removes your name from lines you wrote.</p>`;
+
+// App Store rule 1.2: terms everyone agrees to, with no tolerance for abuse.
+const TERMS = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bingo terms</title>
+<style>body{font:17px/1.5 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;color:#1F1B16;background:#FFF8EF}</style>
+<h1>Terms</h1>
+<p>Bingo is for laughing with your friends, not at them. By using it you agree:</p>
+<ul>
+<li>No hateful, harassing, sexual or threatening lines, and nothing about someone's race, religion, gender, sexuality, disability or body meant to hurt.</li>
+<li>Only play with people who know they're playing.</li>
+<li>We filter slurs, and anyone can report a line. Reported lines are hidden at once. We review reports within 24 hours and remove people who break these terms.</li>
+<li>You can leave a game, remove people from games you made, and block anyone, at any time.</li>
+</ul>
+<p>Questions or a report to make: <a href="mailto:REPLACE_WITH_SUPPORT_EMAIL">REPLACE_WITH_SUPPORT_EMAIL</a></p>`;

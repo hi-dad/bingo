@@ -51,6 +51,7 @@ function Navigation() {
         <Stack.Screen name="game/[id]/write/[target]" options={{ title: '' }} />
         <Stack.Screen name="game/[id]/board/[target]" options={{ title: '' }} />
         <Stack.Screen name="game/[id]/mine" options={{ title: 'Your board' }} />
+        <Stack.Screen name="game/[id]/players" options={{ title: 'People' }} />
       </Stack.Protected>
       {/* Invite links open here signed in or not; the screen offers sign-in itself. */}
       <Stack.Screen name="join/[code]" options={{ title: 'Join a game' }} />
