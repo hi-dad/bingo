@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { ScrollView } from 'react-native';
 import { useAuth } from '@/auth';
-import { Button, ErrorText, Field, Heading, Muted, styles as ui } from '@/components/ui';
+import { Button, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui';
 
 // Asked once, when sign-in didn't come with a name (Apple only shares it the first time).
 export default function Name() {
+  const ui = useUi();
   const auth = useAuth();
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);

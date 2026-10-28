@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import { Alert, Linking, ScrollView } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { useAuth } from '@/auth';
 import { API_URL } from '@/config';
-import { Button, Card, ErrorText, Field, Heading, Muted, styles as ui } from '@/components/ui';
+import { Button, Card, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui';
+import { THEMES, THEME_ORDER, makeStyles, radius, useTheme, type Theme } from '@/theme';
 
 export default function Settings() {
+  const ui = useUi();
   const auth = useAuth();
+  const { t, setTheme } = useTheme();
   const [name, setName] = useState(auth.me?.name ?? '');
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +40,16 @@ export default function Settings() {
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.content} keyboardShouldPersistTaps="handled">
       <Card>
+        <Heading>Color</Heading>
+        <View accessibilityRole="radiogroup" style={{ flexDirection: 'row', gap: 8 }}>
+          {THEME_ORDER.map((n) => (
+            <Swatch key={n} theme={THEMES[n]} selected={t.name === n} onPress={() => setTheme(n)} />
+          ))}
+        </View>
+      </Card>
+      <Card>
         <Heading>Your name</Heading>
-        <Field value={name} onChangeText={(t) => { setName(t); setSaved(false); }} maxLength={24} autoCapitalize="words" />
+        <Field value={name} onChangeText={(v) => { setName(v); setSaved(false); }} maxLength={24} autoCapitalize="words" />
         <ErrorText>{error}</ErrorText>
         <Button kind="secondary" title={saved ? 'Saved ✓' : 'Save name'} disabled={!name.trim() || name.trim() === auth.me?.name} onPress={save} />
       </Card>
@@ -47,7 +58,32 @@ export default function Settings() {
         <Button kind="secondary" title="Sign out" onPress={auth.signOut} />
       </Card>
       <Button kind="secondary" title="Privacy policy" onPress={() => Linking.openURL(`${API_URL}/privacy`)} />
-      <Button kind="danger" title="Delete account" onPress={confirmDelete} style={{ backgroundColor: 'transparent', borderWidth: 0 }} />
+      <Button kind="danger" title="Delete account" onPress={confirmDelete} />
     </ScrollView>
   );
 }
+
+// A theme shown in its own colors: a tiny board, crossed-off square and all.
+function Swatch({ theme, selected, onPress }: { theme: Theme; selected: boolean; onPress: () => void }) {
+  const s = useStyles();
+  return (
+    <Pressable accessibilityRole="radio" accessibilityState={{ selected }} accessibilityLabel={theme.label} onPress={onPress}
+      style={[s.swatch, { backgroundColor: theme.bg, borderColor: selected ? theme.strong : theme.line }]}>
+      <View style={s.mini}>
+        {[0, 1, 2, 3].map((i) => (
+          <View key={i} style={[s.cell, { backgroundColor: i === 1 || i === 2 ? theme.accent : theme.card }]} />
+        ))}
+      </View>
+      <Text style={[s.name, { color: theme.ink }]}>{theme.label}</Text>
+      {selected ? <Text style={[s.check, { color: theme.strong }]}>✓</Text> : null}
+    </Pressable>
+  );
+}
+
+const useStyles = makeStyles(() => ({
+  swatch: { flex: 1, borderRadius: radius.md, borderWidth: 2, paddingVertical: 10, alignItems: 'center', gap: 6 },
+  mini: { width: 34, flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  cell: { width: 15, height: 15, borderRadius: 4 },
+  name: { fontSize: 14, fontWeight: '700' },
+  check: { position: 'absolute', top: 4, right: 7, fontSize: 13, fontWeight: '900' },
+}));

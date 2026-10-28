@@ -182,6 +182,7 @@ describe('playing', () => {
     // Either may win the race; exactly one of them gets the credit.
     expect(['Ben', 'Cal']).toContain(square.markedBy);
     expect(square.markedByMe).toBe(square.markedBy === 'Cal');
+    expect(square.markedById).toBe(square.markedBy === 'Ben' ? g.ids.ben : g.ids.cal);
     const credit = (await view(g.ana, g.id)).scores.filter((x) => x.spotted > 0);
     expect(credit).toHaveLength(1);
   });

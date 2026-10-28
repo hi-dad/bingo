@@ -170,6 +170,7 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
         free: !!r.free,
         markedAt: r.marked_at,
         markedBy: r.marked_by ? names.get(r.marked_by) ?? null : null,
+        markedById: r.marked_by,
         markedByMe: r.marked_by === me.id,
         // Who wrote each line stays a secret until the board is finished.
         writer: done && r.author ? names.get(r.author) ?? null : null,
@@ -372,6 +373,7 @@ export async function ownBoard(env: Env, gameId: string, email: string): Promise
       free: !!r.free,
       markedAt: r.marked_at,
       markedBy: r.marked_by ? names.get(r.marked_by) ?? null : null,
+      markedById: r.marked_by,
       markedByMe: false,
       writer: r.author ? names.get(r.author) ?? null : null,
     })),

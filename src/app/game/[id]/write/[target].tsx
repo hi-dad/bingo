@@ -1,14 +1,17 @@
 import { useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
 import { MAX_PHRASE } from '@shared/logic';
-import { Button, ErrorText, Field, Muted, styles as ui, type InputRef } from '@/components/ui';
-import { colors, radius } from '@/theme';
+import { Button, ErrorText, Field, Muted, useUi, type InputRef } from '@/components/ui';
+import { makeStyles, radius, shadow, useTheme } from '@/theme';
 
 export default function WriteAbout() {
+  const ui = useUi();
+  const styles = useStyles();
+  const { t } = useTheme();
   const { id, target } = useLocalSearchParams<{ id: string; target: string }>();
   const { game, error, act } = useGame(id);
   const [text, setText] = useState('');
@@ -17,7 +20,7 @@ export default function WriteAbout() {
   const input = useRef<InputRef>(null);
   const insets = useSafeAreaInsets();
 
-  if (!game) return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={colors.accent} />}</View>;
+  if (!game) return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={t.strong} />}</View>;
   const person = game.players.find((p) => p.id === target);
   const pool = game.pools[target] ?? [];
   const writing = game.status === 'writing';
@@ -95,15 +98,15 @@ export default function WriteAbout() {
   );
 }
 
-const styles = StyleSheet.create({
-  count: { fontSize: 28, fontWeight: '900', color: colors.ink },
+const useStyles = makeStyles((t) => ({
+  count: { fontSize: 28, fontWeight: '900', color: t.ink },
   phrase: {
     flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: radius.md,
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line,
+    backgroundColor: t.card, ...shadow(t),
   },
-  mine: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-  phraseText: { flex: 1, fontSize: 16, color: colors.ink },
-  delete: { fontSize: 16, color: colors.muted, fontWeight: '700' },
-  composer: { paddingHorizontal: 16, paddingTop: 10, gap: 6, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.bg },
+  mine: { backgroundColor: t.soft, shadowOpacity: 0 },
+  phraseText: { flex: 1, fontSize: 16, color: t.ink },
+  delete: { fontSize: 16, color: t.muted, fontWeight: '700' },
+  composer: { paddingHorizontal: 16, paddingTop: 10, gap: 6, borderTopWidth: 1, borderTopColor: t.line, backgroundColor: t.bg },
   inputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-});
+}));

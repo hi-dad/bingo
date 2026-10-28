@@ -1,26 +1,29 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { SIZES, phrasesNeeded, type Size } from '@shared/logic';
-import { colors, radius } from '@/theme';
+import { makeStyles, radius, shadow, useTheme } from '@/theme';
 
 export function SizePicker({ value, onChange }: { value: Size; onChange: (s: Size) => void }) {
+  const s = useStyles();
+  const { t } = useTheme();
   return (
-    <View style={styles.row}>
-      {SIZES.map((s) => (
-        <Pressable key={s} onPress={() => onChange(s)} accessibilityRole="radio" accessibilityState={{ selected: s === value }}
-          style={[styles.option, s === value && styles.on]}>
-          <Text style={[styles.size, s === value && styles.onText]}>{s}×{s}</Text>
-          <Text style={[styles.hint, s === value && styles.onText]}>{phrasesNeeded(s)} lines each</Text>
-        </Pressable>
-      ))}
+    <View style={s.row}>
+      {SIZES.map((n) => {
+        const on = n === value;
+        return (
+          <Pressable key={n} onPress={() => onChange(n)} accessibilityRole="radio" accessibilityState={{ selected: on }}
+            style={[s.option, on && { backgroundColor: t.strong }]}>
+            <Text style={[s.size, on && { color: t.strongInk }]}>{n}×{n}</Text>
+            <Text style={[s.hint, on && { color: t.strongInk }]}>{phrasesNeeded(n)} lines each</Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((t) => ({
   row: { flexDirection: 'row', gap: 8 },
-  option: { flex: 1, paddingVertical: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', gap: 2 },
-  on: { backgroundColor: colors.ink, borderColor: colors.ink },
-  size: { fontSize: 20, fontWeight: '800', color: colors.ink },
-  hint: { fontSize: 12, color: colors.muted },
-  onText: { color: colors.bg },
-});
+  option: { flex: 1, paddingVertical: 14, borderRadius: radius.md, backgroundColor: t.card, alignItems: 'center', gap: 2, ...shadow(t) },
+  size: { fontSize: 20, fontWeight: '800', color: t.ink },
+  hint: { fontSize: 12, color: t.muted },
+}));

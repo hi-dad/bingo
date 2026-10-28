@@ -1,6 +1,6 @@
 import type { ComponentRef, ReactNode, Ref } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
-import { colors, radius } from '@/theme';
+import { ActivityIndicator, Pressable, Text, TextInput, View, type StyleProp, type TextInputProps, type TextStyle, type ViewStyle } from 'react-native';
+import { makeStyles, radius, shadow, useTheme } from '@/theme';
 
 export function Button({ title, onPress, kind = 'primary', disabled, busy, style }: {
   title: string;
@@ -8,8 +8,10 @@ export function Button({ title, onPress, kind = 'primary', disabled, busy, style
   kind?: 'primary' | 'secondary' | 'danger';
   disabled?: boolean;
   busy?: boolean;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }) {
+  const s = useUi();
+  const { t } = useTheme();
   const primary = kind === 'primary';
   return (
     <Pressable
@@ -17,55 +19,65 @@ export function Button({ title, onPress, kind = 'primary', disabled, busy, style
       disabled={disabled || busy}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.button,
-        primary ? styles.primary : styles.secondary,
+        s.button,
+        primary ? s.primary : kind === 'danger' ? s.danger : s.secondary,
         (disabled || busy) && { opacity: 0.45 },
         pressed && { transform: [{ scale: 0.98 }] },
         style,
       ]}
     >
-      {busy ? <ActivityIndicator color={primary ? colors.accentInk : colors.ink} /> : (
-        <Text style={[styles.buttonText, { color: primary ? colors.accentInk : kind === 'danger' ? colors.accent : colors.ink }]}>{title}</Text>
+      {busy ? <ActivityIndicator color={primary ? t.strongInk : t.ink} /> : (
+        <Text style={[s.buttonText, { color: primary ? t.strongInk : kind === 'danger' ? t.danger : t.ink }]}>{title}</Text>
       )}
     </Pressable>
   );
 }
 
-export function Card({ children, style }: { children: ReactNode; style?: ViewStyle }) {
-  return <View style={[styles.card, style]}>{children}</View>;
+export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  const s = useUi();
+  return <View style={[s.card, style]}>{children}</View>;
 }
 
 export type InputRef = ComponentRef<typeof TextInput>;
 
 export function Field({ ref, ...props }: TextInputProps & { ref?: Ref<InputRef> }) {
-  return <TextInput ref={ref} placeholderTextColor={colors.muted} {...props} style={[styles.field, props.style]} />;
+  const s = useUi();
+  const { t } = useTheme();
+  return <TextInput ref={ref} placeholderTextColor={t.muted} {...props} style={[s.field, props.style]} />;
 }
 
 export function Heading({ children }: { children: ReactNode }) {
-  return <Text style={styles.heading}>{children}</Text>;
+  return <Text style={useUi().heading}>{children}</Text>;
 }
 
-export function Muted({ children, style }: { children: ReactNode; style?: object }) {
-  return <Text style={[styles.muted, style]}>{children}</Text>;
+export function Label({ children }: { children: ReactNode }) {
+  return <Text style={useUi().label}>{children}</Text>;
+}
+
+export function Muted({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
+  return <Text style={[useUi().muted, style]}>{children}</Text>;
 }
 
 export function ErrorText({ children }: { children: ReactNode }) {
-  return children ? <Text style={styles.error}>{children}</Text> : null;
+  const s = useUi();
+  return children ? <Text style={s.error}>{children}</Text> : null;
 }
 
-export const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 20, gap: 16 },
+export const useUi = makeStyles((t) => ({
+  screen: { flex: 1, backgroundColor: t.bg },
+  content: { padding: 18, gap: 16 },
   button: { minHeight: 52, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
-  primary: { backgroundColor: colors.accent },
-  secondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
+  primary: { backgroundColor: t.strong },
+  secondary: { backgroundColor: t.card, ...shadow(t) },
+  danger: { backgroundColor: 'transparent' },
   buttonText: { fontSize: 17, fontWeight: '700' },
-  card: { backgroundColor: colors.card, borderRadius: radius.lg, padding: 16, borderWidth: 1, borderColor: colors.line, gap: 8 },
+  card: { backgroundColor: t.card, borderRadius: radius.lg, padding: 16, gap: 8, ...shadow(t) },
   field: {
-    backgroundColor: colors.card, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line,
-    paddingHorizontal: 16, paddingVertical: 14, fontSize: 17, color: colors.ink,
+    backgroundColor: t.card, borderRadius: radius.md, borderWidth: 1, borderColor: t.line,
+    paddingHorizontal: 16, paddingVertical: 14, fontSize: 17, color: t.ink,
   },
-  heading: { fontSize: 20, fontWeight: '800', color: colors.ink },
-  muted: { fontSize: 15, color: colors.muted, lineHeight: 21 },
-  error: { fontSize: 15, color: colors.accent, fontWeight: '600' },
-});
+  heading: { fontSize: 20, fontWeight: '800', color: t.ink },
+  label: { fontSize: 13, fontWeight: '800', letterSpacing: 1, color: t.muted },
+  muted: { fontSize: 15, color: t.muted, lineHeight: 21 },
+  error: { fontSize: 15, color: t.danger, fontWeight: '600' },
+}));

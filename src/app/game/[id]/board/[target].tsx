@@ -1,16 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
+import { playerIndex } from '@/players';
 import type { Square } from '@shared/types';
+import { Avatar } from '@/components/Avatar';
 import { BingoGrid } from '@/components/BingoGrid';
 import { Confetti } from '@/components/Confetti';
-import { ErrorText, Muted, styles as ui } from '@/components/ui';
-import { colors } from '@/theme';
+import { progressLine } from '@/components/ProgressCard';
+import { ProgressBar, ProgressRing } from '@/components/ProgressRing';
+import { ErrorText, Label, Muted, useUi } from '@/components/ui';
+import { makeStyles, radius, shadow, useTheme } from '@/theme';
 
 export default function BoardScreen() {
+  const ui = useUi();
+  const s = useStyles();
+  const { t } = useTheme();
   const { id, target } = useLocalSearchParams<{ id: string; target: string }>();
   const { game, error, refreshing, refresh, act } = useGame(id);
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -31,8 +38,8 @@ export default function BoardScreen() {
     seen.current = { bingo: board.bingoAt, blackout: board.blackoutAt };
   }, [board?.bingoAt, board?.blackoutAt]);
 
-  if (!game || !board) {
-    return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={colors.accent} />}</View>;
+  if (!game || !board || !person?.progress) {
+    return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={t.strong} />}</View>;
   }
 
   async function toggle(square: Square, on: boolean) {
@@ -47,28 +54,55 @@ export default function BoardScreen() {
     }
   }
 
-  const status = board.blackoutAt
-    ? `Blackout! Every square is gone 🖤`
-    : board.bingoAt
-      ? `${person?.name} got BINGO’d 🎉 Keep going for a blackout.`
-      : `Tap a square when ${person?.name} says it.`;
+  const index = playerIndex(game);
+  const progress = person.progress;
+  const others = game.players.filter((p) => !p.isMe && p.hasBoard && p.id !== target);
 
   return (
     <View style={ui.screen}>
-      <Stack.Screen options={{ title: `${person?.name ?? ''}’s board` }} />
+      <Stack.Screen options={{ title: '' }} />
       <ScrollView contentContainerStyle={ui.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
-        <Text style={[styles.status, board.bingoAt || board.blackoutAt ? { color: colors.accent } : null]}>{status}</Text>
+        <View style={s.header}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={s.title}>{person.name}’s board</Text>
+            <Text style={[s.status, board.bingoAt || board.blackoutAt ? { color: t.strong, fontWeight: '800' } : null]}>
+              {progressLine(progress, game.size)}
+            </Text>
+          </View>
+          <ProgressRing done={progress.marked} total={progress.total} />
+        </View>
         <ErrorText>{error}</ErrorText>
-        <BingoGrid size={game.size} squares={board.squares} pending={pending} onToggle={toggle} />
-        <Muted style={{ textAlign: 'center' }}>
-          {board.blackoutAt ? 'Writers are revealed ✍︎' : 'Tapped by mistake? Tap again to undo.'}
+        <BingoGrid size={game.size} squares={board.squares} pending={pending} onToggle={toggle} playerIndex={index} />
+        <Muted style={{ textAlign: 'center', fontSize: 13 }}>
+          {board.blackoutAt ? 'Writers are revealed ✍︎' : `Tap when ${person.name} says it · faces show who heard it first`}
         </Muted>
+        {others.length ? (
+          <View style={{ gap: 8 }}>
+            <Label>OTHER BOARDS</Label>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {others.map((p) => (
+                <Pressable key={p.id} onPress={() => router.replace(`/game/${game.id}/board/${p.id}`)} style={s.other}>
+                  <View style={s.otherTop}>
+                    <Avatar name={p.name} index={index[p.id]} size={24} />
+                    <Text style={s.otherName} numberOfLines={1}>{p.name}{p.progress?.bingoAt ? ' · BINGO' : ''}</Text>
+                  </View>
+                  <ProgressBar value={p.progress ? p.progress.marked / p.progress.total : 0} />
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
       </ScrollView>
       <Confetti burst={burst} />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  status: { fontSize: 18, fontWeight: '800', color: colors.ink, textAlign: 'center' },
-});
+const useStyles = makeStyles((t) => ({
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  title: { fontSize: 26, fontWeight: '800', color: t.ink, letterSpacing: -0.5 },
+  status: { fontSize: 14, color: t.muted },
+  other: { width: 160, backgroundColor: t.card, borderRadius: radius.md, padding: 12, gap: 8, ...shadow(t) },
+  otherTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  otherName: { flex: 1, fontSize: 15, fontWeight: '800', color: t.ink },
+}));

@@ -46,6 +46,7 @@ export interface Square {
   free: boolean;
   markedAt: number | null;
   markedBy: string | null; // name of who crossed it off
+  markedById: string | null; // their player id (for avatar colors)
   markedByMe: boolean;
   writer: string | null; // revealed once the board is blacked out
 }

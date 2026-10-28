@@ -4,12 +4,14 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { api } from '@/api';
 import { useAuth } from '@/auth';
 import { SignInButtons } from '@/components/SignInButtons';
-import { Button, ErrorText, Heading, Muted, styles as ui } from '@/components/ui';
-import { colors } from '@/theme';
+import { Button, ErrorText, Heading, Muted, useUi } from '@/components/ui';
+import { useTheme } from '@/theme';
 
 // Where invite links (https://<domain>/join/CODE) land. Signed out, it asks you to sign
 // in first and then joins, so the invite isn't lost on the way.
 export default function JoinFromLink() {
+  const ui = useUi();
+  const { t } = useTheme();
   const { code } = useLocalSearchParams<{ code: string }>();
   const { status, me } = useAuth();
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export default function JoinFromLink() {
           <ErrorText>{error}</ErrorText>
           <Button kind="secondary" title="Back to my games" onPress={() => router.replace('/')} />
         </>
-      ) : <ActivityIndicator color={colors.accent} />}
+      ) : <ActivityIndicator color={t.strong} />}
     </ScrollView>
   );
 }

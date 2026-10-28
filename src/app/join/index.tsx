@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { api } from '@/api';
-import { Button, ErrorText, Field, Heading, Muted, styles as ui } from '@/components/ui';
+import { Button, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui';
 
 export default function JoinWithCode() {
+  const ui = useUi();
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

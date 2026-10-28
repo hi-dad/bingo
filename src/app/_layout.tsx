@@ -3,19 +3,22 @@ import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import { AuthProvider, useAuth } from '@/auth';
-import { colors } from '@/theme';
+import { ThemeProvider, useTheme } from '@/theme';
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <StatusBar style="dark" />
-      <Navigation />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <StatusBar style="dark" />
+        <Navigation />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 
 function Navigation() {
   const { status, me } = useAuth();
+  const { t } = useTheme();
   const signedIn = status === 'signedIn';
   const needsName = signedIn && !!me && !me.name;
   useNotificationTaps(signedIn);
@@ -25,12 +28,12 @@ function Navigation() {
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: colors.bg },
+        headerStyle: { backgroundColor: t.bg },
         headerShadowVisible: false,
-        headerTintColor: colors.ink,
+        headerTintColor: t.ink,
         headerTitleStyle: { fontWeight: '800' },
         headerBackButtonDisplayMode: 'minimal',
-        contentStyle: { backgroundColor: colors.bg },
+        contentStyle: { backgroundColor: t.bg },
       }}
     >
       <Stack.Protected guard={!signedIn}>

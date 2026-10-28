@@ -4,9 +4,10 @@ import { router } from 'expo-router';
 import { api } from '@/api';
 import type { Size } from '@shared/logic';
 import { SizePicker } from '@/components/SizePicker';
-import { Button, ErrorText, Field, Heading, Muted, styles as ui } from '@/components/ui';
+import { Button, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui';
 
 export default function NewGame() {
+  const ui = useUi();
   const [name, setName] = useState('');
   const [size, setSize] = useState<Size>(5);
   const [busy, setBusy] = useState(false);
