@@ -61,7 +61,6 @@ export default function Players() {
           </View>
         ))}
       </Card>
-      <Muted>Something hurtful on a board? Press and hold the square (or tap ⚑ next to a line) to report it.</Muted>
       <Button kind="danger" title="Leave game" onPress={leave} />
     </ScrollView>
   );

@@ -53,14 +53,17 @@ CREATE TABLE IF NOT EXISTS phrases (
 );
 CREATE INDEX IF NOT EXISTS phrases_game ON phrases (game_id, target);
 
--- One board per person once the game starts.
+-- Boards about a person. Round 1 is dealt when the game starts; once a board blacks out
+-- (or for someone who joined late), the next round deals itself when enough unused lines
+-- are written about them. A line is used once it's on a square.
 CREATE TABLE IF NOT EXISTS boards (
   id          TEXT    PRIMARY KEY,
   game_id     TEXT    NOT NULL,
   target      TEXT    NOT NULL,
+  round       INTEGER NOT NULL DEFAULT 1,
   bingo_at    INTEGER,
   blackout_at INTEGER,
-  UNIQUE (game_id, target)
+  UNIQUE (game_id, target, round)
 );
 
 -- The squares of a board. marked_at is set when crossed off; the free square starts
@@ -75,6 +78,7 @@ CREATE TABLE IF NOT EXISTS squares (
   marked_at INTEGER,
   UNIQUE (board_id, pos)
 );
+CREATE INDEX IF NOT EXISTS squares_phrase ON squares (phrase_id);
 
 -- Expo push tokens, one per device.
 CREATE TABLE IF NOT EXISTS devices (

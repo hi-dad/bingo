@@ -25,19 +25,12 @@ describe('bingo', () => {
     expect(hasBingo(board(4, [3, 6, 9, 12]), 4)).toBe(true);
   });
 
-  test('the free center counts on a 5×5', () => {
-    expect(freePos(5)).toBe(12);
-    expect(hasBingo(board(5, [10, 11, 13, 14]), 5)).toBe(true);
-    expect(hasBingo(board(5, [0, 6, 18, 24]), 5)).toBe(true);
-    expect(hasBingo(board(5, [10, 11, 13]), 5)).toBe(false);
-  });
-
-  test('no free square below 5×5', () => {
-    expect(freePos(3)).toBe(-1);
-    expect(freePos(4)).toBe(-1);
-    expect(phrasesNeeded(3)).toBe(9);
-    expect(phrasesNeeded(4)).toBe(16);
-    expect(phrasesNeeded(5)).toBe(24);
+  test('a 5×5 has no free square: every square is a line', () => {
+    expect(freePos(5)).toBe(-1);
+    expect(phrasesNeeded(5)).toBe(25);
+    expect(hasBingo(board(5, [10, 11, 13, 14]), 5)).toBe(false);
+    expect(hasBingo(board(5, [10, 11, 12, 13, 14]), 5)).toBe(true);
+    expect(hasBingo(board(5, [0, 6, 12, 18, 24]), 5)).toBe(true);
   });
 
   test('scattered squares are not a bingo', () => {
@@ -45,8 +38,8 @@ describe('bingo', () => {
   });
 
   test('bestLine counts toward the closest line', () => {
-    expect(bestLine(board(5, []), 5)).toBe(1); // the free square
-    expect(bestLine(board(5, [10, 11, 13]), 5)).toBe(4); // one away
+    expect(bestLine(board(5, []), 5)).toBe(0);
+    expect(bestLine(board(5, [10, 11, 12, 13]), 5)).toBe(4); // one away
     expect(bestLine(board(3, [0, 1, 2]), 3)).toBe(3);
   });
 

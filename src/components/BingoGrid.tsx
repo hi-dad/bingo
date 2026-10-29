@@ -46,9 +46,9 @@ export function BingoGrid({ size, squares, pending = {}, onToggle, onLongPress, 
                 adjustsFontSizeToFit
                 minimumFontScale={0.6}
               >
-                {sq.free ? 'free ✦' : sq.text}
+                {sq.free ? 'free' : sq.text}
               </Text>
-              {sq.writer ? <Text style={[s.writer, marked && { color: t.accentInk }]} numberOfLines={1}>✍︎ {sq.writer}</Text> : null}
+              {sq.writer ? <Text style={[s.writer, marked && { color: t.accentInk }]} numberOfLines={1}>{sq.writer}</Text> : null}
             </Pressable>
             {by && sq.markedById ? (
               <Avatar name={by} index={playerIndex[sq.markedById] ?? 0} size={size === 5 ? 20 : 24} ring={t.bg}

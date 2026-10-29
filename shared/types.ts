@@ -28,9 +28,11 @@ export interface Player {
   name: string;
   isMe: boolean;
   isOwner: boolean;
-  poolCount: number; // phrases written about this person so far
-  hasBoard: boolean; // false for someone who joined after the boards were dealt
-  progress: Progress | null; // while playing
+  poolCount: number; // unused lines about this person (not yet on a board)
+  hasBoard: boolean; // has been dealt at least one board
+  round: number; // their latest board's number (1, 2, …), 0 before their first
+  needsLines: boolean; // playing, and waiting for lines for their next board (late joiner, or after a blackout)
+  progress: Progress | null; // their latest board
 }
 
 export interface Phrase {
@@ -64,6 +66,7 @@ export interface Score {
   name: string;
   spotted: number; // squares they crossed off
   written: number; // their phrases that got crossed off
+  boards: number; // boards about them that blacked out
 }
 
 export interface GameView {
@@ -76,7 +79,8 @@ export interface GameView {
   me: string; // your player id
   isOwner: boolean;
   players: Player[];
-  pools: Record<string, Phrase[]>; // writing phase: everyone's pool except yours
-  boards: Record<string, Board>; // playing: everyone's board except yours
+  pools: Record<string, Phrase[]>; // unused lines for everyone you can write about (never yours)
+  boards: Record<string, Board>; // everyone's latest board except yours
+  myMarks: boolean[] | null; // which spots on your latest board are crossed off, by position; never what they say
   scores: Score[];
 }

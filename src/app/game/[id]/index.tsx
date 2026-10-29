@@ -1,22 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Share, Text, View } from 'react-native';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { api } from '@/api';
 import { inviteLink } from '@/config';
 import { useGame } from '@/useGame';
-import { playerIndex } from '@/players';
-import type { GameView, Player } from '@shared/types';
-import { phrasesNeeded, type Size } from '@shared/logic';
-import { Avatar } from '@/components/Avatar';
-import { ProgressCard, progressLine } from '@/components/ProgressCard';
-import { ProgressBar } from '@/components/ProgressRing';
-import { SizePicker } from '@/components/SizePicker';
+import type { GameView, Player, Progress } from '@shared/types';
+import type { Size } from '@shared/logic';
+import { MiniBoard } from '@/components/MiniBoard';
 import { TabBar } from '@/components/TabBar';
 import { Button, Card, ErrorText, Heading, Label, Muted, useUi } from '@/components/ui';
-import { makeStyles, useTheme } from '@/theme';
+import { makeStyles, radius, shadow, useTheme } from '@/theme';
 
-type Tab = 'boards' | 'write' | 'scores';
+type Tab = 'play' | 'scores';
 
 export default function GameHub() {
   const ui = useUi();
@@ -24,7 +20,7 @@ export default function GameHub() {
   const { t } = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { game, error, refreshing, refresh, act } = useGame(id);
-  const [tab, setTab] = useState<Tab | null>(null);
+  const [tab, setTab] = useState<Tab>('play');
 
   if (!game) {
     return (
@@ -34,39 +30,26 @@ export default function GameHub() {
     );
   }
 
-  // Start on Write while lines are being written, on Boards once they're dealt.
-  const active: Tab = tab ?? (game.status === 'writing' ? 'write' : 'boards');
   const invite = () => Share.share({
-    message: `Join “${game.name}” on Bingo. We’re making bingo boards of the stuff we always say 😂\n${inviteLink(game.code)}\n(code ${game.code})`,
+    message: `Join “${game.name}” on Bingo. We’re making bingo boards of the stuff we always say.\n${inviteLink(game.code)}\n(code ${game.code})`,
   });
-  const index = playerIndex(game);
-  const myLinesShort = game.status === 'writing' && game.players.some((p) => !p.isMe && p.poolCount < game.needed);
+  const linesWanted = game.players.some((p) => !p.isMe && writable(game, p) && p.poolCount < game.needed);
 
   return (
     <View style={ui.screen}>
       <Stack.Screen options={{
         title: game.name,
-        headerRight: () => (
-          <View style={{ flexDirection: 'row', gap: 18, alignItems: 'center' }}>
-            <Pressable onPress={invite} hitSlop={10}><Text style={s.link}>Invite</Text></Pressable>
-            <Pressable onPress={() => router.push(`/game/${game.id}/players`)} hitSlop={10} accessibilityLabel="People in this game">
-              <Text style={s.link}>People</Text>
-            </Pressable>
-          </View>
-        ),
+        headerRight: () => <Pressable onPress={invite} hitSlop={10}><Text style={s.link}>Invite</Text></Pressable>,
       }} />
       <ScrollView contentContainerStyle={ui.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
         <ErrorText>{error}</ErrorText>
-        {active === 'boards' ? <BoardsTab game={game} index={index} invite={invite} act={act} /> : null}
-        {active === 'write' ? <WriteTab game={game} index={index} invite={invite} /> : null}
-        {active === 'scores' ? <ScoresTab game={game} index={index} /> : null}
+        {tab === 'play' ? <PlayTab game={game} invite={invite} act={act} /> : <ScoresTab game={game} />}
       </ScrollView>
       <TabBar<Tab>
-        value={active}
+        value={tab}
         onChange={setTab}
         tabs={[
-          { key: 'boards', label: 'Boards' },
-          { key: 'write', label: 'Write', badge: myLinesShort },
+          { key: 'play', label: 'Play', badge: linesWanted },
           { key: 'scores', label: 'Scores' },
         ]}
       />
@@ -74,65 +57,113 @@ export default function GameHub() {
   );
 }
 
-// ---------- Boards ----------
+// Lines can be written about someone before the first deal, and later whenever they're
+// waiting on their next board (joined late, or their last one blacked out).
+function writable(game: GameView, p: Player) {
+  return game.status === 'writing' || p.needsLines;
+}
 
-function BoardsTab({ game, index, invite, act }: { game: GameView; index: Record<string, number>; invite: () => void; act: ReturnType<typeof useGame>['act'] }) {
-  const me = game.players.find((p) => p.isMe)!;
-  if (game.status === 'writing') return <Dealing game={game} index={index} invite={invite} act={act} />;
-  const boards = game.players.filter((p) => !p.isMe && p.hasBoard);
+// ---------- Play ----------
+
+// The same screen through the whole game, in two parts. On top, boards still being written:
+// everyone before the deal, and later anyone who joined late or blacked out. Below, the
+// boards in play, most crossed off first. A blacked-out board stays in the list until the
+// next one about that person is dealt and takes its place.
+function PlayTab({ game, invite, act }: { game: GameView; invite: () => void; act: ReturnType<typeof useGame>['act'] }) {
+  const others = game.players.filter((p) => !p.isMe);
+  const writing = game.players.filter((p) => writable(game, p));
+  const playing = game.players
+    .filter((p) => p.progress)
+    .sort((a, b) => b.progress!.marked - a.progress!.marked || a.name.localeCompare(b.name));
   return (
     <>
-      {me.progress ? (
+      {others.length === 0 ? <InviteCard code={game.code} invite={invite} /> : null}
+      {game.status === 'writing' && others.length ? <Dealing game={game} act={act} /> : null}
+      {writing.length && others.length ? (
         <>
-          <ProgressCard progress={me.progress} size={game.size} />
-          {me.progress.blackoutAt ? <Button title="See your board" onPress={() => router.push(`/game/${game.id}/mine`)} /> : null}
+          <Label>NEW BOARDS</Label>
+          {writing.map((p) => <NewBoardRow key={p.id} game={game} player={p} />)}
         </>
-      ) : (
-        <Card><Muted>You joined after the boards were dealt, so there’s no board about you this round. You can still cross off everyone else’s.</Muted></Card>
-      )}
-      <Label>LISTEN FOR…</Label>
-      {boards.map((p) => <BoardRow key={p.id} game={game} player={p} index={index[p.id]} />)}
+      ) : null}
+      {playing.length ? (
+        <>
+          <Label>LISTEN FOR</Label>
+          {playing.map((p) => <BoardRow key={p.id} game={game} player={p} />)}
+        </>
+      ) : null}
     </>
   );
 }
 
-function BoardRow({ game, player, index }: { game: GameView; player: Player; index: number }) {
+// A board still being written. The mini board fills in as lines come in. You can't write
+// about yourself, so your own row only shows the count.
+function NewBoardRow({ game, player: p }: { game: GameView; player: Player }) {
   const s = useStyles();
   const { t } = useTheme();
-  const p = player.progress!;
-  const tag = p.blackoutAt ? 'BLACKOUT' : p.bingoAt ? 'BINGO' : p.best === game.size - 1 ? '1 AWAY' : null;
+  const have = Math.min(p.poolCount, game.needed);
   return (
-    <Pressable onPress={() => router.push(`/game/${game.id}/board/${player.id}`)}>
-      <Card style={s.row}>
-        <Avatar name={player.name} index={index} size={40} />
-        <View style={{ flex: 1, gap: 6 }}>
-          <View style={s.rowTop}>
-            <Text style={s.name}>{player.name}</Text>
-            {tag ? <Text style={[s.tag, tag === '1 AWAY' && { backgroundColor: t.free, color: t.freeInk }]}>{tag}</Text> : null}
-          </View>
-          <ProgressBar value={p.total ? p.marked / p.total : 0} />
-          <Muted style={{ fontSize: 13 }}>{p.marked}/{p.total} · {progressLine(p, game.size)}</Muted>
-        </View>
-      </Card>
+    <Pressable disabled={p.isMe} onPress={() => router.push(`/game/${game.id}/write/${p.id}`)}
+      accessibilityLabel={`${p.isMe ? 'Your next board' : p.name}, ${have} of ${game.needed} lines`}
+      style={[s.listRow, s.dashed]}>
+      <MiniBoard size={game.size} marks={null} filled={Math.round((have / game.needed) * game.size * game.size)} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={s.name} numberOfLines={1}>{p.isMe ? 'You' : p.name}</Text>
+        <Text style={s.sub}>{have}/{game.needed}</Text>
+      </View>
+      {p.isMe ? null : <Text style={[s.action, { color: t.strong }]}>Write</Text>}
     </Pressable>
   );
 }
 
-function Dealing({ game, index, invite, act }: { game: GameView; index: Record<string, number>; invite: () => void; act: ReturnType<typeof useGame>['act'] }) {
-  const s = useStyles();
-  const others = game.players.filter((p) => !p.isMe);
-  const owner = game.players.find((p) => p.isOwner);
-  const [size, setSize] = useState<Size>(game.size);
-  const [busy, setBusy] = useState(false);
-  const need = phrasesNeeded(size);
-  const short = game.players.filter((p) => p.poolCount < need);
+const AMBER = { bg: '#FFE6B8', ink: '#6B4405' };
 
-  useEffect(() => setSize(game.size), [game.size]);
+// A board in play: the grid, the name, how much is crossed off, and a tag when it matters.
+// Your own shows only which spots are crossed off; it opens once it's blacked out.
+function BoardRow({ game, player: p }: { game: GameView; player: Player }) {
+  const s = useStyles();
+  const { t } = useTheme();
+  const pr = p.progress!;
+  let marks = game.myMarks;
+  if (!p.isMe) {
+    marks = Array<boolean>(game.size * game.size).fill(false);
+    for (const sq of game.boards[p.id]?.squares ?? []) marks[sq.pos] = !!sq.markedAt;
+  }
+  const tag = boardTag(pr, game.size);
+  const tagStyle = tag === 'BLACKOUT' ? { backgroundColor: t.ink, color: t.bg }
+    : tag === 'BINGO' ? { backgroundColor: t.win, color: '#FFFFFF' }
+      : { backgroundColor: AMBER.bg, color: AMBER.ink };
+  const locked = p.isMe && !pr.blackoutAt;
+  return (
+    <Pressable disabled={locked}
+      onPress={() => router.push(p.isMe ? `/game/${game.id}/mine` : `/game/${game.id}/board/${p.id}`)}
+      accessibilityLabel={`${p.isMe ? 'Your board' : p.name}, ${pr.marked} of ${pr.total}${tag ? `, ${tag}` : ''}`}
+      style={[s.listRow, locked ? s.dashed : s.card]}>
+      <MiniBoard size={game.size} marks={marks} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={s.name} numberOfLines={1}>{p.isMe ? 'You' : p.name}</Text>
+        <Text style={s.sub}>{pr.marked}/{pr.total}</Text>
+      </View>
+      {tag ? <Text style={[s.tag, tagStyle]}>{tag}</Text> : null}
+    </Pressable>
+  );
+}
+
+function boardTag(p: Progress, size: Size) {
+  if (p.blackoutAt) return 'BLACKOUT';
+  if (p.bingoAt) return 'BINGO';
+  if (p.best === size - 1) return '1 AWAY';
+  return null;
+}
+
+function Dealing({ game, act }: { game: GameView; act: ReturnType<typeof useGame>['act'] }) {
+  const owner = game.players.find((p) => p.isOwner);
+  const [busy, setBusy] = useState(false);
+  const short = game.players.filter((p) => p.poolCount < game.needed);
 
   async function deal() {
     setBusy(true);
     try {
-      await act(() => api.start(game.id, size));
+      await act(() => api.start(game.id));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
       Alert.alert('Not yet', (err as Error).message);
@@ -141,30 +172,15 @@ function Dealing({ game, index, invite, act }: { game: GameView; index: Record<s
     }
   }
 
+  if (!game.isOwner) {
+    return <Muted style={{ textAlign: 'center' }}>{owner ? `${owner.name} deals the boards once everyone has ${game.needed} lines.` : ''}</Muted>;
+  }
   return (
-    <>
-      {others.length === 0 ? <InviteCard code={game.code} invite={invite} /> : null}
-      <Card>
-        <Heading>Boards get dealt when everyone has {need} lines</Heading>
-        {game.players.map((p) => (
-          <View key={p.id} style={s.readyRow}>
-            <Avatar name={p.name} index={index[p.id]} size={26} />
-            <Text style={s.readyName}>{p.isMe ? 'You' : p.name}</Text>
-            <Text style={[s.readyCount, p.poolCount >= need && s.readyDone]}>{p.poolCount >= need ? 'ready ✓' : `${p.poolCount}/${need}`}</Text>
-          </View>
-        ))}
-      </Card>
-      {game.isOwner ? (
-        <Card>
-          <Heading>Deal the boards</Heading>
-          <SizePicker value={size} onChange={setSize} />
-          {others.length === 0 ? <Muted>Invite at least one friend first.</Muted> : null}
-          <Button title="Deal the boards 🎲" busy={busy} disabled={others.length === 0 || short.length > 0} onPress={deal} />
-        </Card>
-      ) : (
-        <Muted style={{ textAlign: 'center' }}>{owner ? `${owner.name} deals the boards once everyone’s ready.` : ''}</Muted>
-      )}
-    </>
+    <Card>
+      <Heading>{short.length ? 'Deal the boards' : 'Everyone’s ready'}</Heading>
+      {short.length ? <Muted>Everyone needs {game.needed} lines first. {short.length === 1 ? '1 person is' : `${short.length} people are`} still short.</Muted> : null}
+      <Button title="Deal the boards" busy={busy} disabled={short.length > 0} onPress={deal} />
+    </Card>
   );
 }
 
@@ -180,75 +196,32 @@ function InviteCard({ code, invite }: { code: string; invite: () => void }) {
   );
 }
 
-// ---------- Write ----------
-
-function WriteTab({ game, index, invite }: { game: GameView; index: Record<string, number>; invite: () => void }) {
-  const s = useStyles();
-  const me = game.players.find((p) => p.isMe)!;
-  const others = game.players.filter((p) => !p.isMe);
-  if (game.status === 'playing') {
-    return <Card><Heading>Writing’s closed</Heading><Muted>The boards are dealt. Go listen for them on the Boards tab.</Muted></Card>;
-  }
-  return (
-    <>
-      <Card>
-        <Label>ABOUT YOU · SECRET</Label>
-        <Text style={s.big}>{me.poolCount === 0 ? 'Nobody’s written about you yet 😇' : `${me.poolCount} ${me.poolCount === 1 ? 'line' : 'lines'} written about you 👀`}</Text>
-        <Muted>You’ll never see them. That’s the point.</Muted>
-      </Card>
-      {others.length === 0 ? <InviteCard code={game.code} invite={invite} /> : <Label>WRITE ABOUT YOUR FRIENDS</Label>}
-      {others.map((p) => (
-        <Pressable key={p.id} onPress={() => router.push(`/game/${game.id}/write/${p.id}`)}>
-          <Card style={s.row}>
-            <Avatar name={p.name} index={index[p.id]} size={40} />
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={s.name}>{p.name}</Text>
-              <Muted style={{ fontSize: 13 }}>{(game.pools[p.id] ?? []).filter((x) => x.mine).length} by you · {p.poolCount} total</Muted>
-            </View>
-            <Count have={p.poolCount} need={game.needed} />
-          </Card>
-        </Pressable>
-      ))}
-    </>
-  );
-}
-
-function Count({ have, need }: { have: number; need: number }) {
-  const s = useStyles();
-  const done = have >= need;
-  return (
-    <View style={[s.count, done && s.countDone]}>
-      <Text style={[s.countText, done && s.countDoneText]}>{done ? '✓' : `${have}/${need}`}</Text>
-    </View>
-  );
-}
-
 // ---------- Scores ----------
 
-function ScoresTab({ game, index }: { game: GameView; index: Record<string, number> }) {
+// Ranked by blackouts (boards about them that got fully crossed off), then by squares heard.
+function ScoresTab({ game }: { game: GameView }) {
   const s = useStyles();
-  const predictable = game.players.filter((p) => p.progress?.bingoAt).sort((a, b) => a.progress!.bingoAt! - b.progress!.bingoAt!);
-  const scores = [...game.scores].sort((a, b) => b.spotted + b.written - (a.spotted + a.written));
+  const scores = [...game.scores].sort((a, b) => b.boards - a.boards || b.spotted - a.spotted || a.name.localeCompare(b.name));
   return (
     <>
-      <Card style={s.row}>
-        <Text style={{ fontSize: 30 }}>👑</Text>
-        <View style={{ flex: 1 }}>
-          <Label>MOST PREDICTABLE</Label>
-          <Text style={s.big}>{predictable.length ? (predictable[0].isMe ? 'You 😳' : predictable[0].name) : 'Nobody yet'}</Text>
-        </View>
-      </Card>
       <Card>
-        {scores.map((sc) => (
+        <View style={s.scoreRow}>
+          <Text style={s.rank}> </Text>
+          <Text style={[s.scoreName, s.scoreHead]}> </Text>
+          <Text style={[s.scoreStat, s.scoreHead]}>BLACKOUTS</Text>
+          <Text style={[s.scoreStat, s.scoreHead]}>SQUARES</Text>
+        </View>
+        {scores.map((sc, i) => (
           <View key={sc.id} style={s.scoreRow}>
-            <Avatar name={sc.name} index={index[sc.id] ?? 0} size={30} />
-            <Text style={s.scoreName}>{sc.id === game.me ? 'You' : sc.name}</Text>
-            <Text style={s.scoreStat}>👂 {sc.spotted}</Text>
-            <Text style={s.scoreStat}>✍︎ {sc.written}</Text>
+            <Text style={s.rank}>{i + 1}</Text>
+            <Text style={s.scoreName} numberOfLines={1}>{sc.id === game.me ? 'You' : sc.name}</Text>
+            <Text style={[s.scoreStat, s.scoreMain]}>{sc.boards}</Text>
+            <Text style={s.scoreStat}>{sc.spotted}</Text>
           </View>
         ))}
-        <Muted style={{ fontSize: 13 }}>👂 squares you heard first · ✍︎ your lines that came true</Muted>
+        <Muted style={{ fontSize: 13 }}>Blackouts: boards about them that got fully crossed off. Squares: lines they heard first.</Muted>
       </Card>
+      <Button kind="secondary" title="People in this game" onPress={() => router.push(`/game/${game.id}/players`)} />
     </>
   );
 }
@@ -256,20 +229,17 @@ function ScoresTab({ game, index }: { game: GameView; index: Record<string, numb
 const useStyles = makeStyles((t) => ({
   link: { fontSize: 17, fontWeight: '700', color: t.strong },
   code: { fontSize: 34, fontWeight: '900', letterSpacing: 6, color: t.ink, textAlign: 'center', paddingVertical: 4 },
-  big: { fontSize: 20, fontWeight: '800', color: t.ink },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  rowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   name: { fontSize: 17, fontWeight: '800', color: t.ink },
-  tag: { fontSize: 11, fontWeight: '900', letterSpacing: 1, color: t.strongInk, backgroundColor: t.strong, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, overflow: 'hidden' },
-  readyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 },
-  readyName: { flex: 1, fontSize: 16, fontWeight: '600', color: t.ink },
-  readyCount: { fontSize: 15, fontWeight: '700', color: t.muted },
-  readyDone: { color: t.strong },
-  count: { minWidth: 56, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: t.soft, alignItems: 'center' },
-  countDone: { backgroundColor: t.strong },
-  countText: { fontWeight: '800', color: t.ink },
-  countDoneText: { color: t.strongInk },
-  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  tag: { fontSize: 11, fontWeight: '900', letterSpacing: 1, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, overflow: 'hidden' },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14, borderRadius: radius.lg },
+  card: { backgroundColor: t.card, ...shadow(t) },
+  dashed: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: t.line },
+  sub: { fontSize: 14, color: t.muted, fontWeight: '600' },
+  action: { fontSize: 15, fontWeight: '800' },
+  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 5 },
+  scoreHead: { fontSize: 11, fontWeight: '800', letterSpacing: 1, color: t.muted },
+  rank: { width: 20, fontSize: 15, fontWeight: '700', color: t.muted },
   scoreName: { flex: 1, fontSize: 16, fontWeight: '600', color: t.ink },
-  scoreStat: { width: 52, textAlign: 'right', fontSize: 16, color: t.ink },
+  scoreStat: { width: 84, textAlign: 'right', fontSize: 16, color: t.ink },
+  scoreMain: { fontWeight: '900' },
 }));

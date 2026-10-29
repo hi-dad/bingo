@@ -22,6 +22,7 @@
 //   GET    /api/blocks             -> [{ id, name }] people you've blocked
 //   DELETE /api/blocks/:id         -> unblock
 //   POST   /api/phrases/:id/report -> { reason? } hide a line and report it; returns GameView
+//   PUT    /api/phrases/:id        -> { text } edit a line you wrote, until it's on a board; returns GameView
 //   DELETE /api/phrases/:id        -> delete a line you wrote; returns GameView
 //   POST   /api/squares/:id/mark   -> cross off; returns GameView
 //   POST   /api/squares/:id/unmark -> undo; returns GameView
@@ -31,7 +32,7 @@
 
 import type { Env } from './env';
 import { verifySignIn, createSession, sessionEmail, endSession, saveName, nameOf, cleanName } from './auth';
-import { HttpError, addPhrase, createGame, deleteAccount, deletePhrase, gameView, joinGame, listGames, ownBoard, setMark, startGame, type Later } from './games';
+import { HttpError, addPhrase, createGame, deleteAccount, deletePhrase, editPhrase, gameView, joinGame, listGames, ownBoard, setMark, startGame, type Later } from './games';
 import { EXPO_TOKEN } from './push';
 import { isHateful, NOT_ALLOWED } from './filter';
 import { blockPlayer, leaveGame, listBlocks, removePlayer, reportPhrase, unblock } from './safety';
@@ -139,7 +140,7 @@ async function api(request: Request, env: Env, path: string, email: string, late
   if (kind === 'games' && id) {
     if (!action && method === 'GET') return json(await gameView(env, id, email));
     if (action === 'phrases' && method === 'POST') {
-      await addPhrase(env, id, email, await readJson(request));
+      await addPhrase(env, id, email, await readJson(request), later);
       return json(await gameView(env, id, email));
     }
     if (action === 'start' && method === 'POST') {
@@ -170,6 +171,11 @@ async function api(request: Request, env: Env, path: string, email: string, late
   if (kind === 'blocks' && id && !action && method === 'DELETE') {
     await unblock(env, id, email);
     return json({ ok: true });
+  }
+
+  if (kind === 'phrases' && id && !action && method === 'PUT') {
+    const { gameId } = await editPhrase(env, id, email, await readJson(request));
+    return json(await gameView(env, gameId, email));
   }
 
   if (kind === 'phrases' && id && !action && method === 'DELETE') {

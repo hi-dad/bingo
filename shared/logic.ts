@@ -1,6 +1,6 @@
 // Bingo rules shared by the app and the Worker. Pure functions only: no I/O, no globals.
-// A board is `size` × `size`, positions numbered row by row from 0. A 5×5 board has a
-// free center square; smaller boards don't.
+// A board is `size` × `size`, positions numbered row by row from 0. Games deal 5×5 boards
+// with no free square: every square is a line.
 
 export const SIZES = [3, 4, 5] as const;
 export type Size = (typeof SIZES)[number];
@@ -9,9 +9,10 @@ export function isSize(n: unknown): n is Size {
   return SIZES.includes(n as Size);
 }
 
-// The free square's position, or -1 when the board has none.
-export function freePos(size: Size): number {
-  return size === 5 ? 12 : -1;
+// The free square's position, or -1 when the board has none. No board has one now; boards
+// dealt before that change keep theirs in the database, which is why the hook stays.
+export function freePos(_size: Size): number {
+  return -1;
 }
 
 // How many phrases a person's pool needs before their board can be dealt.

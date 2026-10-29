@@ -25,10 +25,14 @@ const AuthContext = createContext<Auth | null>(null);
 
 export class Cancelled extends Error {}
 
-GoogleSignin.configure({
-  webClientId: GOOGLE_WEB_CLIENT_ID || undefined,
-  iosClientId: GOOGLE_IOS_CLIENT_ID || undefined,
-});
+// Without an iOS client ID the native module throws at launch, so builds made before the
+// Google placeholders are filled in skip it (the Google button then reports the error).
+if (GOOGLE_IOS_CLIENT_ID) {
+  GoogleSignin.configure({
+    webClientId: GOOGLE_WEB_CLIENT_ID || undefined,
+    iosClientId: GOOGLE_IOS_CLIENT_ID,
+  });
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>('loading');

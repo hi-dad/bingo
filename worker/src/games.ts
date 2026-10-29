@@ -3,7 +3,7 @@
 
 import type { Env } from './env';
 import type { Board, GameSummary, GameView, Phrase, Player, Progress, Score, Square } from '../../shared/types';
-import { CODE_ALPHABET, MAX_PHRASE, bestLine, deal, freePos, hasBingo, isBlackout, isSize, phrasesNeeded, type Size } from '../../shared/logic';
+import { CODE_ALPHABET, MAX_PHRASE, bestLine, deal, freePos, hasBingo, isBlackout, phrasesNeeded, type Size } from '../../shared/logic';
 import { pushTo, type Push } from './push';
 import { NOT_ALLOWED, isHateful } from './filter';
 
@@ -14,6 +14,7 @@ export class HttpError extends Error {
 }
 
 const MAX_NAME = 40;
+const BOARD_SIZE: Size = 5;
 const MAX_POOL = 60; // phrases per person per game
 const REMOVED = 'Removed after a report';
 
@@ -40,8 +41,7 @@ export async function createGame(env: Env, email: string, body: { name?: unknown
   const name = cleanText(body.name, MAX_NAME);
   if (!name) throw new HttpError(400, 'Give the game a name');
   if (isHateful(name)) throw new HttpError(400, NOT_ALLOWED);
-  const size = body.size === undefined ? 5 : Number(body.size);
-  if (!isSize(size)) throw new HttpError(400, 'Boards are 3×3, 4×4 or 5×5');
+  const size = BOARD_SIZE; // every board is 5×5; `body.size` from older app builds is ignored
   const gameId = id();
   const memberId = id();
   const now = Date.now();
@@ -103,9 +103,13 @@ export async function membership(env: Env, gameId: string, email: string): Promi
 
 interface SquareRow {
   id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null; phrase_id: string | null;
-  board_id: string; target: string; bingo_at: number | null; blackout_at: number | null;
+  board_id: string; target: string; round: number; bingo_at: number | null; blackout_at: number | null;
   text: string | null; author: string | null; removed: number | null;
 }
+
+// Lines not yet on any board. Each board uses fresh lines, so these are what the next board
+// about someone gets dealt from.
+const UNUSED = 'p.removed = 0 AND NOT EXISTS (SELECT 1 FROM squares s WHERE s.phrase_id = p.id)';
 
 export async function gameView(env: Env, gameId: string, email: string): Promise<GameView> {
   const { game, me } = await membership(env, gameId, email);
@@ -115,16 +119,14 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
       `SELECT m.id, m.joined_at, u.name FROM members m LEFT JOIN users u ON u.email = m.email
         WHERE m.game_id = ? ORDER BY m.joined_at`,
     ).bind(gameId).all<{ id: string; joined_at: number; name: string | null }>(),
-    env.DB.prepare('SELECT target, COUNT(*) AS n FROM phrases WHERE game_id = ? AND removed = 0 GROUP BY target')
+    env.DB.prepare(`SELECT p.target, COUNT(*) AS n FROM phrases p WHERE p.game_id = ? AND ${UNUSED} GROUP BY p.target`)
       .bind(gameId).all<{ target: string; n: number }>(),
     // Never the asker's own pool.
-    game.status === 'writing'
-      ? env.DB.prepare('SELECT id, target, author, text FROM phrases WHERE game_id = ? AND target != ? AND removed = 0 ORDER BY created_at')
-        .bind(gameId, me.id).all<{ id: string; target: string; author: string | null; text: string }>()
-      : null,
+    env.DB.prepare(`SELECT p.id, p.target, p.author, p.text FROM phrases p WHERE p.game_id = ? AND p.target != ? AND ${UNUSED} ORDER BY p.created_at`)
+      .bind(gameId, me.id).all<{ id: string; target: string; author: string | null; text: string }>(),
     game.status === 'playing'
       ? env.DB.prepare(
-        `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, s.phrase_id, b.id AS board_id, b.target, b.bingo_at, b.blackout_at,
+        `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, s.phrase_id, b.id AS board_id, b.target, b.round, b.bingo_at, b.blackout_at,
                 p.text, p.author, p.removed
            FROM boards b JOIN squares s ON s.board_id = b.id LEFT JOIN phrases p ON p.id = s.phrase_id
           WHERE b.game_id = ? ORDER BY s.pos`,
@@ -135,12 +137,16 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
   const names = new Map(members.results.map((m, i) => [m.id, m.name || `Player ${i + 1}`]));
   const poolCount = new Map(counts.results.map((c) => [c.target, c.n]));
 
-  // Group squares by board; the asker's own board is reduced to counts below.
+  // Each person's latest board (highest round); the asker's own is reduced to counts below.
   const byTarget = new Map<string, SquareRow[]>();
+  const blackouts = new Map<string, number>();
   for (const s of squares?.results ?? []) {
-    if (!byTarget.has(s.target)) byTarget.set(s.target, []);
-    byTarget.get(s.target)!.push(s);
+    const cur = byTarget.get(s.target);
+    if (!cur || cur[0].round < s.round) byTarget.set(s.target, [s]);
+    else if (cur[0].round === s.round) cur.push(s);
+    if (s.pos === 0 && s.blackout_at) blackouts.set(s.target, (blackouts.get(s.target) ?? 0) + 1);
   }
+  const needsLines = (target: string) => game.status === 'playing' && (!byTarget.has(target) || !!byTarget.get(target)![0].blackout_at);
 
   const progress = (rows: SquareRow[] | undefined): Progress | null => {
     if (!rows?.length) return null;
@@ -161,11 +167,15 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     isOwner: m.id === game.owner,
     poolCount: poolCount.get(m.id) ?? 0,
     hasBoard: byTarget.has(m.id),
+    round: byTarget.get(m.id)?.[0].round ?? 0,
+    needsLines: needsLines(m.id),
     progress: progress(byTarget.get(m.id)),
   }));
 
+  // While playing, only people waiting on their next board can be written about.
   const pools: Record<string, Phrase[]> = {};
-  for (const p of pool?.results ?? []) {
+  for (const p of pool.results) {
+    if (game.status === 'playing' && !needsLines(p.target)) continue;
     (pools[p.target] ??= []).push({ id: p.id, text: p.text, mine: p.author === me.id });
   }
 
@@ -193,7 +203,7 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     };
   }
 
-  const scores: Score[] = players.map((p) => ({ id: p.id, name: p.name, spotted: 0, written: 0 }));
+  const scores: Score[] = players.map((p) => ({ id: p.id, name: p.name, spotted: 0, written: 0, boards: blackouts.get(p.id) ?? 0 }));
   const scoreOf = new Map(scores.map((s) => [s.id, s]));
   for (const s of squares?.results ?? []) {
     if (!s.marked_at || s.free) continue;
@@ -213,6 +223,8 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     players,
     pools,
     boards,
+    // Where your own board is crossed off, by position only: never the lines themselves.
+    myMarks: byTarget.has(me.id) ? markedList(byTarget.get(me.id)!, size) : null,
     scores,
   };
 }
@@ -225,22 +237,53 @@ function markedList(rows: { pos: number; marked_at: number | null }[], size: Siz
 
 // ---------- writing ----------
 
-export async function addPhrase(env: Env, gameId: string, email: string, body: { target?: unknown; text?: unknown }) {
+export async function addPhrase(env: Env, gameId: string, email: string, body: { target?: unknown; text?: unknown }, later: Later) {
   const { game, me } = await membership(env, gameId, email);
-  if (game.status !== 'writing') throw new HttpError(409, 'The boards have already been dealt');
   const target = String(body.target ?? '');
   if (target === me.id) throw new HttpError(403, 'No peeking at your own board');
   const member = await env.DB.prepare('SELECT id FROM members WHERE id = ? AND game_id = ?').bind(target, gameId).first();
   if (!member) throw new HttpError(404, 'That person isn’t in this game');
+  if (game.status === 'playing' && !(await waitingForBoard(env, gameId, target))) {
+    throw new HttpError(409, 'Their board is still going. You can write more once it’s blacked out');
+  }
   const text = cleanText(body.text, MAX_PHRASE);
   if (!text) throw new HttpError(400, 'Write something they say');
   if (isHateful(text)) throw new HttpError(400, NOT_ALLOWED);
-  const { results } = await env.DB.prepare('SELECT text FROM phrases WHERE game_id = ? AND target = ? AND removed = 0')
-    .bind(gameId, target).all<{ text: string }>();
-  if (results.length >= MAX_POOL) throw new HttpError(409, 'That list is full');
+  // Duplicates are checked against every round, so a later board never repeats a line.
+  const { results } = await env.DB.prepare(
+    `SELECT p.text, ${UNUSED} AS unused FROM phrases p WHERE p.game_id = ? AND p.target = ? AND p.removed = 0`,
+  ).bind(gameId, target).all<{ text: string; unused: number }>();
+  if (results.filter((r) => r.unused).length >= MAX_POOL) throw new HttpError(409, 'That list is full');
   if (results.some((r) => r.text.toLowerCase() === text.toLowerCase())) throw new HttpError(409, 'Someone already wrote that one');
   await env.DB.prepare('INSERT INTO phrases (id, game_id, target, author, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .bind(id(), gameId, target, me.id, text, Date.now()).run();
+  if (game.status === 'playing') await dealNext(env, game, target, later);
+}
+
+// Playing, and this person has no board going: none yet (joined late) or their last one blacked out.
+async function waitingForBoard(env: Env, gameId: string, target: string): Promise<boolean> {
+  const latest = await env.DB.prepare('SELECT blackout_at FROM boards WHERE game_id = ? AND target = ? ORDER BY round DESC LIMIT 1')
+    .bind(gameId, target).first<{ blackout_at: number | null }>();
+  return !latest || !!latest.blackout_at;
+}
+
+// Rewrite a line you wrote, until it's on a board.
+export async function editPhrase(env: Env, phraseId: string, email: string, body: { text?: unknown }): Promise<{ gameId: string }> {
+  const phrase = await env.DB.prepare('SELECT game_id, target, author FROM phrases WHERE id = ? AND removed = 0')
+    .bind(phraseId).first<{ game_id: string; target: string; author: string }>();
+  if (!phrase) throw new HttpError(404, 'Not found');
+  const { game, me } = await membership(env, phrase.game_id, email);
+  if (phrase.author !== me.id) throw new HttpError(403, 'You can only edit your own lines');
+  const used = await env.DB.prepare('SELECT 1 FROM squares WHERE phrase_id = ?').bind(phraseId).first();
+  if (used) throw new HttpError(409, 'That line is already on a board');
+  const text = cleanText(body.text, MAX_PHRASE);
+  if (!text) throw new HttpError(400, 'Write something they say');
+  if (isHateful(text)) throw new HttpError(400, NOT_ALLOWED);
+  const clash = await env.DB.prepare('SELECT 1 FROM phrases WHERE game_id = ? AND target = ? AND id != ? AND removed = 0 AND lower(text) = lower(?)')
+    .bind(game.id, phrase.target, phraseId, text).first();
+  if (clash) throw new HttpError(409, 'Someone already wrote that one');
+  await env.DB.prepare('UPDATE phrases SET text = ? WHERE id = ?').bind(text, phraseId).run();
+  return { gameId: game.id };
 }
 
 export async function deletePhrase(env: Env, phraseId: string, email: string): Promise<{ gameId: string }> {
@@ -248,7 +291,8 @@ export async function deletePhrase(env: Env, phraseId: string, email: string): P
   if (!phrase) throw new HttpError(404, 'Not found');
   const { game, me } = await membership(env, phrase.game_id, email);
   if (phrase.author !== me.id) throw new HttpError(403, 'You can only delete your own lines');
-  if (game.status !== 'writing') throw new HttpError(409, 'The boards have already been dealt');
+  const used = await env.DB.prepare('SELECT 1 FROM squares WHERE phrase_id = ?').bind(phraseId).first();
+  if (used) throw new HttpError(409, 'That line is already on a board');
   await env.DB.prepare('DELETE FROM phrases WHERE id = ?').bind(phraseId).run();
   return { gameId: game.id };
 }
@@ -259,8 +303,7 @@ export async function startGame(env: Env, gameId: string, email: string, body: {
   const { game, me } = await membership(env, gameId, email);
   if (me.id !== game.owner) throw new HttpError(403, 'Only the person who made the game can deal the boards');
   if (game.status !== 'writing') throw new HttpError(409, 'The boards have already been dealt');
-  const size = body.size === undefined ? game.size : Number(body.size);
-  if (!isSize(size)) throw new HttpError(400, 'Boards are 3×3, 4×4 or 5×5');
+  const size = BOARD_SIZE;
 
   const [members, phrases] = await Promise.all([
     env.DB.prepare('SELECT id, email FROM members WHERE game_id = ?').bind(gameId).all<{ id: string; email: string }>(),
@@ -271,23 +314,11 @@ export async function startGame(env: Env, gameId: string, email: string, body: {
   const short = members.results.filter((m) => phrases.results.filter((p) => p.target === m.id).length < needed);
   if (short.length) throw new HttpError(409, `${short.length === 1 ? 'Someone needs' : `${short.length} people need`} more lines first`);
 
-  const now = Date.now();
-  const free = freePos(size);
   const stmts: D1PreparedStatement[] = [
     env.DB.prepare('UPDATE games SET status = ?, size = ? WHERE id = ?').bind('playing', size, gameId),
   ];
-  for (const m of members.results) {
-    const boardId = id();
-    // boards has UNIQUE (game_id, target): if two starts race, the second batch fails whole.
-    stmts.push(env.DB.prepare('INSERT INTO boards (id, game_id, target) VALUES (?, ?, ?)').bind(boardId, gameId, m.id));
-    const picked = deal(phrases.results.filter((p) => p.target === m.id), needed, secureRandom);
-    let next = 0;
-    for (let pos = 0; pos < size * size; pos++) {
-      stmts.push(pos === free
-        ? env.DB.prepare('INSERT INTO squares (id, board_id, pos, phrase_id, free, marked_at) VALUES (?, ?, ?, NULL, 1, ?)').bind(id(), boardId, pos, now)
-        : env.DB.prepare('INSERT INTO squares (id, board_id, pos, phrase_id) VALUES (?, ?, ?, ?)').bind(id(), boardId, pos, picked[next++].id));
-    }
-  }
+  // boards has UNIQUE (game_id, target, round): if two starts race, the second batch fails whole.
+  for (const m of members.results) stmts.push(...boardStatements(env, gameId, m.id, 1, phrases.results.filter((p) => p.target === m.id), size));
   try {
     await env.DB.batch(stmts);
   } catch (err) {
@@ -295,10 +326,56 @@ export async function startGame(env: Env, gameId: string, email: string, body: {
     throw err;
   }
   later(pushTo(env, members.results.filter((m) => m.id !== me.id).map((m) => m.email), {
-    title: 'Boards are live 🎲',
+    title: 'Boards are live',
     body: `${game.name}: start listening.`,
     data: { gameId, url: `/game/${gameId}` },
   }));
+}
+
+// A board about `target`, dealt at random from their unused lines.
+function boardStatements(env: Env, gameId: string, target: string, round: number, lines: { id: string }[], size: Size): D1PreparedStatement[] {
+  const boardId = id();
+  const now = Date.now();
+  const free = freePos(size);
+  const picked = deal(lines, phrasesNeeded(size), secureRandom);
+  const stmts = [env.DB.prepare('INSERT INTO boards (id, game_id, target, round) VALUES (?, ?, ?, ?)').bind(boardId, gameId, target, round)];
+  let next = 0;
+  for (let pos = 0; pos < size * size; pos++) {
+    stmts.push(pos === free
+      ? env.DB.prepare('INSERT INTO squares (id, board_id, pos, phrase_id, free, marked_at) VALUES (?, ?, ?, NULL, 1, ?)').bind(id(), boardId, pos, now)
+      : env.DB.prepare('INSERT INTO squares (id, board_id, pos, phrase_id) VALUES (?, ?, ?, ?)').bind(id(), boardId, pos, picked[next++].id));
+  }
+  return stmts;
+}
+
+// Mid-game, a person without a board going gets their next one as soon as there are enough
+// unused lines about them: someone who joined late, or anyone whose last board blacked out.
+async function dealNext(env: Env, game: GameRow, target: string, later: Later) {
+  const size = game.size as Size;
+  const latest = await env.DB.prepare('SELECT round, blackout_at FROM boards WHERE game_id = ? AND target = ? ORDER BY round DESC LIMIT 1')
+    .bind(game.id, target).first<{ round: number; blackout_at: number | null }>();
+  if (latest && !latest.blackout_at) return;
+  const { results: lines } = await env.DB.prepare(`SELECT p.id FROM phrases p WHERE p.game_id = ? AND p.target = ? AND ${UNUSED}`)
+    .bind(game.id, target).all<{ id: string }>();
+  if (lines.length < phrasesNeeded(size)) return;
+  const round = (latest?.round ?? 0) + 1;
+  try {
+    await env.DB.batch(boardStatements(env, game.id, target, round, lines, size));
+  } catch (err) {
+    if (String(err).includes('UNIQUE')) return; // two writers raced; the other one dealt it
+    throw err;
+  }
+  const { results: members } = await env.DB.prepare(
+    'SELECT m.id, m.email, u.name FROM members m LEFT JOIN users u ON u.email = m.email WHERE m.game_id = ?',
+  ).bind(game.id).all<{ id: string; email: string; name: string | null }>();
+  const name = members.find((m) => m.id === target)?.name || 'Someone';
+  const data = { gameId: game.id, url: `/game/${game.id}` };
+  later((async () => {
+    await pushTo(env, members.filter((m) => m.id !== target).map((m) => m.email),
+      { title: `${name} has a new board`, body: `Board ${round} in ${game.name}. Start listening.`, data });
+    await pushTo(env, members.filter((m) => m.id === target).map((m) => m.email),
+      { title: 'There’s a new board about you', body: `Board ${round} in ${game.name} is live.`, data });
+  })());
 }
 
 function secureRandom(): number {
@@ -312,12 +389,13 @@ function secureRandom(): number {
 // recorded only the first time (conditional updates), so each is announced exactly once.
 export async function setMark(env: Env, squareId: string, email: string, on: boolean, later: Later): Promise<{ gameId: string }> {
   const sq = await env.DB.prepare(
-    `SELECT s.free, b.id AS board_id, b.target, b.game_id FROM squares s JOIN boards b ON b.id = s.board_id WHERE s.id = ?`,
-  ).bind(squareId).first<{ free: number; board_id: string; target: string; game_id: string }>();
+    `SELECT s.free, b.id AS board_id, b.target, b.game_id, b.blackout_at FROM squares s JOIN boards b ON b.id = s.board_id WHERE s.id = ?`,
+  ).bind(squareId).first<{ free: number; board_id: string; target: string; game_id: string; blackout_at: number | null }>();
   if (!sq) throw new HttpError(404, 'Not found');
   const { game, me } = await membership(env, sq.game_id, email);
   if (sq.target === me.id) throw new HttpError(404, 'Not found'); // your own board doesn't exist, as far as you know
   if (sq.free) throw new HttpError(400, 'That’s the free square');
+  if (sq.blackout_at) throw new HttpError(400, 'That board is blacked out, so it’s done'); // writers are revealed; no going back
   const now = Date.now();
 
   if (!on) {
@@ -341,15 +419,16 @@ export async function setMark(env: Env, squareId: string, email: string, on: boo
   if (hasBingo(marked, size)) {
     const first = await env.DB.prepare('UPDATE boards SET bingo_at = ? WHERE id = ? AND bingo_at IS NULL').bind(now, sq.board_id).run();
     if (first.meta.changes) {
-      news.push({ title: 'BINGO! 🎉', body: `${targetName} just got BINGO’d in ${game.name}.`, data });
-      toTarget.push({ title: 'You got BINGO’d 😳', body: `Your friends crossed off a whole line in ${game.name}.`, data });
+      news.push({ title: 'BINGO!', body: `${targetName} just got BINGO’d in ${game.name}.`, data });
+      toTarget.push({ title: 'You got BINGO’d', body: `Your friends crossed off a whole line in ${game.name}.`, data });
     }
   }
   if (isBlackout(marked, size)) {
     const first = await env.DB.prepare('UPDATE boards SET blackout_at = ? WHERE id = ? AND blackout_at IS NULL').bind(now, sq.board_id).run();
     if (first.meta.changes) {
-      news.push({ title: 'Blackout! 🖤', body: `Every square on ${targetName}’s board is gone. See who wrote what.`, data });
-      toTarget.push({ title: 'Your board is blacked out 🖤', body: `You said all of it. Open ${game.name} to see your board.`, data });
+      news.push({ title: 'Blackout!', body: `Every square on ${targetName}’s board is gone. See who wrote what.`, data });
+      toTarget.push({ title: 'Your board is blacked out', body: `You said all of it. Open ${game.name} to see your board.`, data });
+      await dealNext(env, game, sq.target, later); // leftover lines may already be enough for the next board
     }
   }
   if (news.length) {
@@ -369,8 +448,9 @@ export async function setMark(env: Env, squareId: string, email: string, on: boo
 // After a blackout there's nothing left to protect, so the target may see their board.
 export async function ownBoard(env: Env, gameId: string, email: string): Promise<Board> {
   const { me } = await membership(env, gameId, email);
-  const board = await env.DB.prepare('SELECT id, bingo_at, blackout_at FROM boards WHERE game_id = ? AND target = ?')
-    .bind(gameId, me.id).first<{ id: string; bingo_at: number | null; blackout_at: number | null }>();
+  const board = await env.DB.prepare(
+    'SELECT id, bingo_at, blackout_at FROM boards WHERE game_id = ? AND target = ? AND blackout_at IS NOT NULL ORDER BY round DESC LIMIT 1',
+  ).bind(gameId, me.id).first<{ id: string; bingo_at: number | null; blackout_at: number | null }>();
   if (!board?.blackout_at) throw new HttpError(403, 'Not until your board is blacked out');
   const view = await gameView(env, gameId, email);
   const names = new Map(view.players.map((p) => [p.id, p.name]));

@@ -29,9 +29,9 @@ export default function MyBoard() {
 
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
-      <Text style={s.title}>So this is what you sound like 😅</Text>
+      <Text style={s.title}>So this is what you sound like</Text>
       <BingoGrid size={size} squares={board.squares} playerIndex={game ? playerIndex(game) : {}} />
-      <Muted style={{ textAlign: 'center' }}>✍︎ shows who wrote each line · faces show who heard it</Muted>
+      <Muted style={{ textAlign: 'center' }}>Names on top show who wrote each line. Faces show who heard it.</Muted>
     </ScrollView>
   );
 }

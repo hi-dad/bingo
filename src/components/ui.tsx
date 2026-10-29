@@ -75,6 +75,7 @@ export const useUi = makeStyles((t) => ({
   field: {
     backgroundColor: t.card, borderRadius: radius.md, borderWidth: 1, borderColor: t.line,
     paddingHorizontal: 16, paddingVertical: 14, fontSize: 17, color: t.ink,
+    letterSpacing: 0, // explicit: a recycled native input otherwise keeps the join screen's spacing
   },
   heading: { fontSize: 20, fontWeight: '800', color: t.ink },
   label: { fontSize: 13, fontWeight: '800', letterSpacing: 1, color: t.muted },

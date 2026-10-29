@@ -1,7 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { API_URL } from './config';
 import type { Board, GameSummary, GameView } from '@shared/types';
-import type { Size } from '@shared/logic';
 
 const TOKEN_KEY = 'session';
 
@@ -67,16 +66,17 @@ export const api = {
   registerPush: (pushToken: string) => request('POST', '/api/push/register', { token: pushToken }),
 
   games: () => request<GameSummary[]>('GET', '/api/games'),
-  createGame: (name: string, size: Size) => request<{ id: string }>('POST', '/api/games', { name, size }),
+  createGame: (name: string) => request<{ id: string }>('POST', '/api/games', { name }),
   join: (code: string) => request<{ id: string }>('POST', `/api/join/${encodeURIComponent(code)}`),
   game: (id: string) => request<GameView>('GET', `/api/games/${id}`),
   addPhrase: (id: string, target: string, text: string) => request<GameView>('POST', `/api/games/${id}/phrases`, { target, text }),
   deletePhrase: (phraseId: string) => request<GameView>('DELETE', `/api/phrases/${phraseId}`),
-  start: (id: string, size: Size) => request<GameView>('POST', `/api/games/${id}/start`, { size }),
+  start: (id: string) => request<GameView>('POST', `/api/games/${id}/start`),
   mine: (id: string) => request<Board>('GET', `/api/games/${id}/mine`),
   mark: (squareId: string, on: boolean) => request<GameView>('POST', `/api/squares/${squareId}/${on ? 'mark' : 'unmark'}`),
 
   // Keeping it friendly
+  editPhrase: (phraseId: string, text: string) => request<GameView>('PUT', `/api/phrases/${phraseId}`, { text }),
   report: (phraseId: string, reason?: string) => request<GameView>('POST', `/api/phrases/${phraseId}/report`, { reason }),
   leave: (id: string) => request('POST', `/api/games/${id}/leave`),
   remove: (id: string, player: string) => request<GameView>('POST', `/api/games/${id}/remove`, { player }),

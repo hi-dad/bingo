@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { Icon } from '@/components/Icon';
 import { Link, Stack, router, useFocusEffect } from 'expo-router';
 import { api } from '@/api';
 import type { GameSummary } from '@shared/types';
@@ -30,7 +31,7 @@ export default function Games() {
       <Stack.Screen options={{
         headerRight: () => (
           <Link href="/settings" asChild>
-            <Pressable hitSlop={12} accessibilityLabel="Settings"><Text style={[s.gear, { color: t.ink }]}>⚙︎</Text></Pressable>
+            <Pressable hitSlop={12} accessibilityLabel="Settings"><Icon name="settings" size={22} color={t.ink} /></Pressable>
           </Link>
         ),
       }} />
@@ -69,7 +70,6 @@ export default function Games() {
 }
 
 const useStyles = makeStyles((t) => ({
-  gear: { fontSize: 24 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   name: { fontSize: 19, fontWeight: '800', color: t.ink, flexShrink: 1 },
   badge: { fontSize: 11, fontWeight: '800', letterSpacing: 1, color: t.muted, backgroundColor: t.soft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, overflow: 'hidden' },

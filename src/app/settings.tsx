@@ -65,7 +65,7 @@ export default function Settings() {
         <Heading>Your name</Heading>
         <Field value={name} onChangeText={(v) => { setName(v); setSaved(false); }} maxLength={24} autoCapitalize="words" />
         <ErrorText>{error}</ErrorText>
-        <Button kind="secondary" title={saved ? 'Saved ✓' : 'Save name'} disabled={!name.trim() || name.trim() === auth.me?.name} onPress={save} />
+        <Button kind="secondary" title={saved ? 'Saved' : 'Save name'} disabled={!name.trim() || name.trim() === auth.me?.name} onPress={save} />
       </Card>
       {blocked.length ? (
         <Card>
@@ -78,6 +78,13 @@ export default function Settings() {
           ))}
         </Card>
       ) : null}
+      <Card>
+        <Heading>Something hurtful?</Heading>
+        <Muted>
+          Press and hold any square or line to report it. It’s hidden for everyone right away and sent to us to review.
+          To stop seeing someone, block them from a game’s People screen.
+        </Muted>
+      </Card>
       <Card>
         <Muted>Signed in as {auth.me?.email}</Muted>
         <Button kind="secondary" title="Sign out" onPress={auth.signOut} />
@@ -100,7 +107,6 @@ function Swatch({ theme, selected, onPress }: { theme: Theme; selected: boolean;
         ))}
       </View>
       <Text style={[s.name, { color: theme.ink }]}>{theme.label}</Text>
-      {selected ? <Text style={[s.check, { color: theme.strong }]}>✓</Text> : null}
     </Pressable>
   );
 }
@@ -110,5 +116,4 @@ const useStyles = makeStyles(() => ({
   mini: { width: 34, flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
   cell: { width: 15, height: 15, borderRadius: 4 },
   name: { fontSize: 14, fontWeight: '700' },
-  check: { position: 'absolute', top: 4, right: 7, fontSize: 13, fontWeight: '900' },
 }));

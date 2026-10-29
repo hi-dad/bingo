@@ -22,6 +22,7 @@ export interface Theme {
   strongInk: string; // text on strong
   soft: string; // tracks, chips, quiet fills
   free: string; // the free square
+  win: string; // a bingo line on the mini boards (text on it is white)
   freeInk: string;
   danger: string;
   shadow: string;
@@ -34,25 +35,25 @@ export const THEMES: Record<ThemeName, Theme> = {
     name: 'lilac', label: 'Lilac',
     bg: '#F6F4FE', card: '#FFFFFF', ink: '#24213A', muted: '#5E5A78', line: '#E7E3F7',
     accent: '#6655D6', accentInk: '#FFFFFF', strong: '#6655D6', strongInk: '#FFFFFF',
-    soft: '#E9E5FB', free: '#CDEFE0', freeInk: '#1E5C43', danger: '#C2352B', shadow: '#3C328C',
+    soft: '#E9E5FB', free: '#CDEFE0', freeInk: '#1E5C43', win: '#D9542B', danger: '#C2352B', shadow: '#3C328C',
   },
   peach: {
     name: 'peach', label: 'Peach',
     bg: '#FFF6EF', card: '#FFFFFF', ink: '#3D2216', muted: '#7A5646', line: '#F5E1D3',
     accent: '#F4A07E', accentInk: '#3D1406', strong: '#B5532C', strongInk: '#FFFFFF',
-    soft: '#FFE4D4', free: '#FFE7A8', freeInk: '#5E4206', danger: '#B3261E', shadow: '#A05028',
+    soft: '#FFE4D4', free: '#FFE7A8', freeInk: '#5E4206', win: '#C2366A', danger: '#B3261E', shadow: '#A05028',
   },
   mint: {
     name: 'mint', label: 'Mint',
     bg: '#F4FBF8', card: '#FFFFFF', ink: '#12332A', muted: '#4D6B62', line: '#DDEFE8',
     accent: '#A6E8CF', accentInk: '#0F3D2E', strong: '#1F7F62', strongInk: '#FFFFFF',
-    soft: '#DDEFE8', free: '#DFF6EC', freeInk: '#17694F', danger: '#B3261E', shadow: '#1F6450',
+    soft: '#DDEFE8', free: '#DFF6EC', freeInk: '#17694F', win: '#D9542B', danger: '#B3261E', shadow: '#1F6450',
   },
   sky: {
     name: 'sky', label: 'Sky',
     bg: '#F2F7FF', card: '#FFFFFF', ink: '#16233F', muted: '#4B5A78', line: '#DCE6F7',
     accent: '#3366D6', accentInk: '#FFFFFF', strong: '#3366D6', strongInk: '#FFFFFF',
-    soft: '#DCE7FB', free: '#CFE0FF', freeInk: '#2A55B8', danger: '#B3261E', shadow: '#1E46A0',
+    soft: '#DCE7FB', free: '#CFE0FF', freeInk: '#2A55B8', win: '#D9542B', danger: '#B3261E', shadow: '#1E46A0',
   },
 };
 

@@ -30,7 +30,8 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "test": "npm --prefix worker test",
-    "worker": "npm --prefix worker run dev"
+    "worker": "npm --prefix worker run dev",
+    "demo": "node scripts/demo.mjs"
   },
   "private": true
 }
