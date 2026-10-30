@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { API_URL } from './config';
-import type { Board, GameSummary, GameView } from '@shared/types';
+import type { ArchivedBoard, Board, GameSummary, GameView } from '@shared/types';
 
 const TOKEN_KEY = 'session';
 
@@ -73,12 +73,14 @@ export const api = {
   deletePhrase: (phraseId: string) => request<GameView>('DELETE', `/api/phrases/${phraseId}`),
   start: (id: string) => request<GameView>('POST', `/api/games/${id}/start`),
   mine: (id: string) => request<Board>('GET', `/api/games/${id}/mine`),
+  archivedBoard: (boardId: string) => request<ArchivedBoard>('GET', `/api/boards/${boardId}`),
   mark: (squareId: string, on: boolean) => request<GameView>('POST', `/api/squares/${squareId}/${on ? 'mark' : 'unmark'}`),
 
   // Keeping it friendly
   editPhrase: (phraseId: string, text: string) => request<GameView>('PUT', `/api/phrases/${phraseId}`, { text }),
   report: (phraseId: string, reason?: string) => request<GameView>('POST', `/api/phrases/${phraseId}/report`, { reason }),
   leave: (id: string) => request('POST', `/api/games/${id}/leave`),
+  retire: (id: string, target: string) => request<GameView>('POST', `/api/games/${id}/retire`, { target }),
   remove: (id: string, player: string) => request<GameView>('POST', `/api/games/${id}/remove`, { player }),
   block: (id: string, player: string) => request('POST', `/api/games/${id}/block`, { player }),
   blocks: () => request<{ id: string; name: string }[]>('GET', '/api/blocks'),

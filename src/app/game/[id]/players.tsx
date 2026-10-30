@@ -1,4 +1,4 @@
-import { Alert, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
@@ -6,16 +6,16 @@ import { playerIndex } from '@/players';
 import type { Player } from '@shared/types';
 import { Avatar } from '@/components/Avatar';
 import { Button, Card, ErrorText, Label, Muted, useUi } from '@/components/ui';
-import { makeStyles } from '@/theme';
+import { makeStyles, useTheme } from '@/theme';
 
-// Who's in the game, and the ways to deal with someone: the owner can remove them for good;
-// anyone can block them (which also takes you out of the game) or leave.
+// Who's in the game: the owner can remove someone for good, and anyone can leave.
 export default function Players() {
   const ui = useUi();
   const s = useStyles();
+  const { t } = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { game, error, act } = useGame(id);
-  if (!game) return <View style={[ui.screen, ui.content]}><ErrorText>{error}</ErrorText></View>;
+  if (!game) return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={t.strong} />}</View>;
   const index = playerIndex(game);
 
   const fail = (err: unknown) => Alert.alert('Didn’t work', (err as Error).message);
@@ -47,17 +47,14 @@ export default function Players() {
       <Card>
         {game.players.map((p) => (
           <View key={p.id} style={s.row}>
-            <Avatar name={p.name} index={index[p.id]} size={36} />
-            <View style={{ flex: 1 }}>
-              <Text style={s.name}>{p.isMe ? 'You' : p.name}</Text>
-              {p.isOwner ? <Muted style={{ fontSize: 13 }}>Made the game</Muted> : null}
-            </View>
-            {!p.isMe ? (
-              <View style={s.actions}>
-                {game.isOwner ? <Button kind="secondary" title="Remove" onPress={() => remove(p)} style={s.small} /> : null}
-                <Button kind="danger" title="Block" onPress={() => block(p)} style={s.small} />
+            <Pressable disabled={p.isMe} onLongPress={() => block(p)} accessibilityHint={p.isMe ? undefined : 'Press and hold to block this person'} style={s.identity}>
+              <Avatar name={p.name} index={index[p.id]} size={36} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.name}>{p.isMe ? 'You' : p.name}</Text>
+                {p.isOwner ? <Muted style={{ fontSize: 13 }}>Made the game</Muted> : null}
               </View>
-            ) : null}
+            </Pressable>
+            {!p.isMe && game.isOwner ? <Button kind="secondary" title="Remove" onPress={() => remove(p)} style={s.small} /> : null}
           </View>
         ))}
       </Card>
@@ -68,7 +65,7 @@ export default function Players() {
 
 const useStyles = makeStyles((t) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6 },
+  identity: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   name: { fontSize: 16, fontWeight: '700', color: t.ink },
-  actions: { flexDirection: 'row', gap: 6 },
   small: { minHeight: 40, paddingHorizontal: 12 },
 }));

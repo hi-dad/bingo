@@ -86,29 +86,28 @@ const done = [];
   done.push(`Roommates (${g.code}): new game, only you in it. Invite card.`);
 }
 
-// 2. Writing, you deal: everyone's one line short except you. Write one each, then deal.
+// 2. Writing: everyone is one line short except you. The last line starts the game.
 {
   const g = await makeGame('Ana', 'Book club', ['Ben', 'Cal']);
   await write(g, 'Ana', N);
   await write(g, 'Ben', N - 1);
   await write(g, 'Cal', N - 1, 5);
-  done.push(`Book club (${g.code}): writing. Ben and Cal are each 1 line short. Add one each, then deal.`);
+  done.push(`Book club (${g.code}): writing. Ben and Cal are each 1 line short. Add one each; the boards deal automatically.`);
 }
 
-// 3. Writing, someone else deals.
+// 3. Writing, with several incomplete boards.
 {
   const g = await makeGame('Ben', 'Work friends', ['Ana', 'Mia']);
   await write(g, 'Ana', 18);
   await write(g, 'Ben', 10);
   await write(g, 'Mia', 6, 3);
-  done.push(`Work friends (${g.code}): writing. Ben made it, so Ben deals.`);
+  done.push(`Work friends (${g.code}): writing. Waiting on all three people to reach 25 lines.`);
 }
 
 // 4. Live game with every state.
 {
   const g = await makeGame('Ana', 'Lake trip', ['Ben', 'Cal', 'Mia', 'Dan', 'Kk']);
   for (const [i, n] of g.names.entries()) await write(g, n, N, i * 4);
-  await call(tok.Ana, 'POST', `/api/games/${g.id}/start`);
   await mark(g, 'Ana', [0, 1, 2, 3, 9, 14], 'Ben'); // 1 away for you
   await mark(g, 'Ben', [6, 12], 'Cal'); // warming up
   await mark(g, 'Cal', [5, 6, 7, 8, 20, 24], 'Mia'); // 1 away
@@ -127,7 +126,6 @@ const done = [];
 {
   const g = await makeGame('Mia', 'Spring break', ['Ana', 'Ben', 'Kk']);
   for (const [i, n] of g.names.entries()) await write(g, n, N, i * 6);
-  await call(tok.Mia, 'POST', `/api/games/${g.id}/start`);
   await mark(g, 'Ana', ALL.filter((p) => p % 2 === 0), 'Ben');
   await mark(g, 'Ana', ALL.filter((p) => p % 2 === 1), 'Kk');
   await mark(g, 'Ben', [0, 6, 12, 18, 24, 3], 'Ana'); // bingo on the diagonal

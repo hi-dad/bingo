@@ -30,15 +30,14 @@ export default function JoinFromLink() {
         <Heading>You’re invited to a bingo game</Heading>
         <Muted>Sign in to join. Your friends will write a board about you, and you’ll never see it.</Muted>
         <SignInButtons />
-        <Muted style={{ fontSize: 13, textAlign: 'center' }}>By continuing you agree to the terms: no hateful or hurtful lines.</Muted>
       </ScrollView>
     );
   }
   if (status === 'signedIn' && !me?.name) {
     return (
       <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
-        <Muted>Pick a name first, then open the invite again.</Muted>
-        <Button title="Pick a name" onPress={() => router.replace('/name')} />
+        <Muted>Pick a name first. We’ll bring you straight into the game afterward.</Muted>
+        <Button title="Pick a name" onPress={() => router.replace({ pathname: '/name', params: { invite: code } })} />
       </ScrollView>
     );
   }

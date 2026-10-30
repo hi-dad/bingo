@@ -5,6 +5,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { api, ApiError } from './api';
 import type { GameView } from '@shared/types';
 
@@ -31,6 +32,12 @@ export function useGame(id: string) {
     try {
       await track(() => api.game(id));
     } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setGame(null);
+        setError('This game is no longer available.');
+        router.dismissTo('/');
+        return;
+      }
       setError(err instanceof ApiError ? err.message : 'Something went wrong');
     }
   }, [id, track]);

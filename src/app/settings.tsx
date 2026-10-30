@@ -9,12 +9,14 @@ import { THEMES, THEME_ORDER, makeStyles, radius, useTheme, type Theme } from '@
 
 export default function Settings() {
   const ui = useUi();
+  const s = useStyles();
   const auth = useAuth();
   const { t, setTheme } = useTheme();
   const [name, setName] = useState(auth.me?.name ?? '');
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<{ id: string; name: string }[]>([]);
+  const [hurtfulOpen, setHurtfulOpen] = useState(false);
 
   useFocusEffect(useCallback(() => { api.blocks().then(setBlocked).catch(() => {}); }, []));
 
@@ -79,17 +81,17 @@ export default function Settings() {
         </Card>
       ) : null}
       <Card>
-        <Heading>Something hurtful?</Heading>
-        <Muted>
-          Press and hold any square or line to report it. It’s hidden for everyone right away and sent to us to review.
-          To stop seeing someone, block them from a game’s People screen.
-        </Muted>
-      </Card>
-      <Card>
         <Muted>Signed in as {auth.me?.email}</Muted>
         <Button kind="secondary" title="Sign out" onPress={auth.signOut} />
       </Card>
       <Button kind="secondary" title="Privacy policy" onPress={() => Linking.openURL(`${API_URL}/privacy`)} />
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: hurtfulOpen }} onPress={() => setHurtfulOpen((open) => !open)} style={s.safety}>
+        <View style={s.safetyRow}>
+          <Text style={s.safetyTitle}>Report a concern</Text>
+          <Text style={s.safetyToggle}>{hurtfulOpen ? 'Hide' : 'Help'}</Text>
+        </View>
+        {hurtfulOpen ? <Muted>Press and hold any square or line to report it. To block someone, press and hold their name in People.</Muted> : null}
+      </Pressable>
       <Button kind="danger" title="Delete account" onPress={confirmDelete} />
     </ScrollView>
   );
@@ -111,9 +113,13 @@ function Swatch({ theme, selected, onPress }: { theme: Theme; selected: boolean;
   );
 }
 
-const useStyles = makeStyles(() => ({
+const useStyles = makeStyles((t) => ({
   swatch: { flex: 1, borderRadius: radius.md, borderWidth: 2, paddingVertical: 10, alignItems: 'center', gap: 6 },
   mini: { width: 34, flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
   cell: { width: 15, height: 15, borderRadius: 4 },
   name: { fontSize: 14, fontWeight: '700' },
+  safety: { paddingHorizontal: 14, paddingVertical: 11, borderWidth: 1, borderColor: t.line, borderRadius: radius.md, gap: 8 },
+  safetyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  safetyTitle: { fontSize: 15, fontWeight: '700', color: t.ink },
+  safetyToggle: { fontSize: 14, fontWeight: '800', color: t.strong },
 }));

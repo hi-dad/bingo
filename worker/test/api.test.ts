@@ -44,8 +44,9 @@ async function signIn(name: string) {
 const view = async (token: string, id: string) => (await call(token, 'GET', `/api/games/${id}`)).data as GameView;
 const idOf = (v: GameView, name: string) => v.players.find((p) => p.name === name)!.id;
 
-// Ana makes a game (boards are 5×5, so 25 lines each); Ben and Cal join; everyone writes 26
-// lines about each other, 13 from each writer.
+// Ana makes a game (boards are 5×5, so 25 lines each); Ben and Cal join; everyone writes 24
+// lines about each other, 12 from each writer. Tests can inspect the writing state before
+// adding each person's last line, which automatically starts play.
 // Lines are tagged with who they're about ("about-ana-…") so leaks are easy to spot.
 async function setUp() {
   const ana = await signIn('Ana');
@@ -60,13 +61,22 @@ async function setUp() {
   for (const [writer, token] of Object.entries(people)) {
     for (const target of Object.keys(people)) {
       if (target === writer) continue;
-      for (let i = 0; i < 13; i++) {
+      for (let i = 0; i < 12; i++) {
         const r = await call(token, 'POST', `/api/games/${id}/phrases`, { target: idOf(v, target), text: `about-${target.toLowerCase()}-${writer}-${i}` });
         expect(r.status).toBe(200);
       }
     }
   }
   return { id, code, ana, ben, cal, ids: { ana: idOf(v, 'Ana'), ben: idOf(v, 'Ben'), cal: idOf(v, 'Cal') } };
+}
+
+async function fillAndStart(g: Awaited<ReturnType<typeof setUp>>) {
+  await call(g.ben, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: 'ready-ana' });
+  await call(g.ana, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ben, text: 'ready-ben' });
+  const started = await call(g.ana, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.cal, text: 'ready-cal' });
+  expect(started.status).toBe(200);
+  expect(started.data.status).toBe('playing');
+  return started;
 }
 
 const squareAt = (v: GameView, target: string, pos: number) => v.boards[target].squares.find((s) => s.pos === pos)!.id;
@@ -79,7 +89,10 @@ describe('writing', () => {
     expect(a.text).toContain('about-ben');
     expect(Object.keys(a.data.pools).sort()).toEqual([g.ids.ben, g.ids.cal].sort());
     // …but they can see how many there are.
-    expect(a.data.players.find((p: { isMe: boolean }) => p.isMe).poolCount).toBe(26);
+    expect(a.data.players.find((p: { isMe: boolean }) => p.isMe).poolCount).toBe(24);
+    const home = await call(g.ana, 'GET', '/api/games');
+    expect(home.text).not.toContain('about-ana');
+    expect(home.data[0]).toMatchObject({ id: g.id, ownPoolCount: 24, round: 0, progress: null, myMarks: null });
   });
 
   test('emails never leave the server', async () => {
@@ -119,7 +132,7 @@ describe('editing lines', () => {
     const other = (await view(g.ben, g.id)).pools[g.ids.ana].find((p) => p.mine && p.id !== mine.id)!;
     expect((await call(g.ben, 'PUT', `/api/phrases/${other.id}`, { text: 'says LITERALLY' })).status).toBe(409);
     // Once a line is on a board it's fixed.
-    await call(g.ana, 'POST', `/api/games/${g.id}/start`);
+    await fillAndStart(g);
     const used = await env.DB.prepare('SELECT p.id FROM phrases p JOIN squares s ON s.phrase_id = p.id JOIN members m ON m.id = p.author WHERE m.email = ? LIMIT 1')
       .bind('ben@example.com').first<{ id: string }>();
     expect((await call(g.ben, 'PUT', `/api/phrases/${used!.id}`, { text: 'too late' })).status).toBe(409);
@@ -127,30 +140,24 @@ describe('editing lines', () => {
 });
 
 describe('dealing', () => {
-  test('waits for full pools, only the owner deals, and only once', async () => {
+  test('waits for full pools, caps each pool at 25, and starts automatically', async () => {
     const g = await setUp();
-    // 25 needed; drop Ana's pool from 26 to 24 lines
-    for (const writer of [g.ben, g.cal]) {
-      const mine = (await view(writer, g.id)).pools[g.ids.ana].filter((p) => p.mine);
-      if (writer === g.ben) for (const p of mine.slice(0, 2)) await call(writer, 'DELETE', `/api/phrases/${p.id}`);
-    }
     expect((await call(g.ana, 'POST', `/api/games/${g.id}/start`)).data.error).toMatch(/more lines/);
     await call(g.ben, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: 'about-ana-extra' });
-
-    expect((await call(g.ben, 'POST', `/api/games/${g.id}/start`)).status).toBe(403);
-    const started = await call(g.ana, 'POST', `/api/games/${g.id}/start`);
-    expect(started.status).toBe(200);
+    expect((await call(g.cal, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: 'too-many' })).status).toBe(409);
+    expect((await view(g.ben, g.id)).status).toBe('writing');
+    await call(g.ana, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ben, text: 'ready-ben' });
+    const started = await call(g.ben, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.cal, text: 'ready-cal' });
     expect(started.data.status).toBe('playing');
-    expect((await call(g.ana, 'POST', `/api/games/${g.id}/start`)).status).toBe(409);
+    expect((await call(g.ben, 'POST', `/api/games/${g.id}/start`)).status).toBe(409);
     await settle();
     expect(pushes.filter((p) => p.title.startsWith('Boards are live')).map((p) => p.to).sort())
-      .toEqual(['ExponentPushToken[Ben-device-0001]', 'ExponentPushToken[Cal-device-0001]']);
+      .toEqual(['ExponentPushToken[Ana-device-0001]', 'ExponentPushToken[Cal-device-0001]']);
   });
 
   test('boards are 5×5 with no free square', async () => {
     const g = await setUp();
-    // Older app builds sent a size; boards are 5×5 regardless.
-    expect((await call(g.ana, 'POST', `/api/games/${g.id}/start`, { size: 3 })).status).toBe(200);
+    await fillAndStart(g);
     const v = await view(g.ben, g.id);
     const squares = v.boards[g.ids.ana].squares;
     expect(squares).toHaveLength(25);
@@ -163,7 +170,7 @@ describe('dealing', () => {
 describe('playing', () => {
   async function playing() {
     const g = await setUp();
-    await call(g.ana, 'POST', `/api/games/${g.id}/start`);
+    await fillAndStart(g);
     await settle();
     pushes = [];
     return g;
@@ -175,10 +182,20 @@ describe('playing', () => {
     expect(a.text).not.toContain('about-ana');
     expect(Object.keys(a.data.boards).sort()).toEqual([g.ids.ben, g.ids.cal].sort());
     expect(a.data.players.find((p: { isMe: boolean }) => p.isMe).progress).toMatchObject({ marked: 0, total: 25 });
+    const homeBefore = await call(g.ana, 'GET', '/api/games');
+    expect(homeBefore.text).not.toContain('about-ana');
+    expect(homeBefore.data[0]).toMatchObject({ id: g.id, round: 1, progress: { marked: 0, total: 25 } });
+    expect(homeBefore.data[0].myMarks).toEqual(Array(25).fill(false));
+    const first = squareAt(await view(g.ben, g.id), g.ids.ana, 0);
+    await call(g.ben, 'POST', `/api/squares/${first}/mark`);
+    const homeAfter = await call(g.ana, 'GET', '/api/games');
+    expect(homeAfter.data[0].progress.marked).toBe(1);
+    expect(homeAfter.data[0].myMarks[0]).toBe(true);
     // Square ids of your own board (learned from a friend) don't work for you either.
-    const sq = squareAt(await view(g.ben, g.id), g.ids.ana, 0);
-    expect((await call(g.ana, 'POST', `/api/squares/${sq}/mark`)).status).toBe(404);
+    expect((await call(g.ana, 'POST', `/api/squares/${first}/mark`)).status).toBe(404);
     expect((await call(g.ana, 'GET', `/api/games/${g.id}/mine`)).status).toBe(403);
+    const hidden = await env.DB.prepare('SELECT id FROM boards WHERE game_id = ? AND target = ?').bind(g.id, g.ids.ana).first<{ id: string }>();
+    expect((await call(g.ana, 'GET', `/api/boards/${hidden!.id}`)).status).toBe(404);
   });
 
   test('two people crossing off the same square at once mark it once', async () => {
@@ -224,12 +241,13 @@ describe('playing', () => {
     expect(written).toBe(9);
   });
 
-  test('unmarking undoes a square; the target cannot touch their own board', async () => {
+  test('only the spotter can undo a square; the target cannot touch their own board', async () => {
     const g = await playing();
     const sq = squareAt(await view(g.ben, g.id), g.ids.cal, 0);
     await call(g.ben, 'POST', `/api/squares/${sq}/mark`);
     expect((await call(g.cal, 'POST', `/api/squares/${sq}/unmark`)).status).toBe(404);
-    const r = await call(g.ana, 'POST', `/api/squares/${sq}/unmark`);
+    expect((await call(g.ana, 'POST', `/api/squares/${sq}/unmark`)).status).toBe(403);
+    const r = await call(g.ben, 'POST', `/api/squares/${sq}/unmark`);
     expect(r.data.boards[g.ids.cal].squares[0].markedAt).toBeNull();
   });
 
@@ -249,6 +267,12 @@ describe('playing', () => {
     const mine = await call(g.ana, 'GET', `/api/games/${g.id}/mine`);
     expect(mine.status).toBe(200);
     expect(mine.text).toContain('about-ana');
+    const finished = cal.finishedBoards.find((b) => b.target === g.ids.ana)!;
+    expect(finished).toMatchObject({ name: 'Ana', round: 1, mine: false });
+    const archived = await call(g.ana, 'GET', `/api/boards/${finished.id}`);
+    expect(archived.status).toBe(200);
+    expect(archived.data).toMatchObject({ name: 'Ana', round: 1, target: g.ids.ana });
+    expect(archived.text).toContain('about-ana');
   });
 
   test('someone who joins late plays along without a board', async () => {
@@ -288,16 +312,15 @@ describe('playing', () => {
     let v = await view(g.ben, g.id);
     for (let pos = 0; pos < 25; pos++) await call(g.ben, 'POST', `/api/squares/${squareAt(v, g.ids.ana, pos)}/mark`);
     const ana = await view(g.ana, g.id);
-    expect(ana.players.find((p) => p.isMe)).toMatchObject({ needsLines: true, round: 1, poolCount: 1 });
+    expect(ana.players.find((p) => p.isMe)).toMatchObject({ needsLines: true, round: 1, poolCount: 0 });
     expect(ana.myMarks).toEqual(Array(25).fill(true));
     expect(JSON.stringify(ana)).not.toContain('about-ana');
     const firstBoard = new Set(v.boards[g.ids.ana].squares.map((s) => s.text));
-    // One line was left over from the first deal; 24 more make 25.
-    for (let i = 0; i < 24; i++) await call(g.cal, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: `round2-ana-${i}` });
+    for (let i = 0; i < 25; i++) await call(g.cal, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: `round2-ana-${i}` });
     v = await view(g.ben, g.id);
     expect(v.players.find((p) => p.id === g.ids.ana)).toMatchObject({ round: 2, needsLines: false });
     for (const s of v.boards[g.ids.ana].squares) expect(firstBoard.has(s.text)).toBe(false);
-    expect(v.scores.find((s) => s.id === g.ids.ana)!.boards).toBe(1);
+    expect(v.scores.find((s) => s.id === g.ids.ana)).toMatchObject({ bingos: 1, blackouts: 1 });
     // Ana can still look back at the board that blacked out.
     expect((await call(g.ana, 'GET', `/api/games/${g.id}/mine`)).text).toContain('about-ana');
   });
@@ -312,7 +335,7 @@ describe('accounts', () => {
 
   test('deleting an account removes the person and hands the game on', async () => {
     const g = await setUp();
-    await call(g.ana, 'POST', `/api/games/${g.id}/start`);
+    await fillAndStart(g);
     expect((await call(g.ana, 'DELETE', '/api/account')).status).toBe(200);
     expect((await call(g.ana, 'GET', '/api/games')).status).toBe(401);
     const v = await view(g.ben, g.id);
@@ -365,23 +388,78 @@ describe('keeping it friendly', () => {
     expect(r.status).toBe(200);
     expect(r.text).not.toContain(line.text);
     expect((await call(g.ben, 'GET', `/api/games/${g.id}`)).text).not.toContain(line.text);
-    // It no longer counts toward Ana's pool, so the deal waits for a replacement.
-    expect((await view(g.ana, g.id)).players.find((p) => p.isMe)!.poolCount).toBe(25); // 26 minus the reported one
-    expect((await call(g.ana, 'POST', `/api/games/${g.id}/start`)).status).toBe(200);
+    // It no longer counts toward Ana's pool, so the automatic deal waits for a replacement.
+    expect((await view(g.ana, g.id)).players.find((p) => p.isMe)!.poolCount).toBe(23);
+    await call(g.ana, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ben, text: 'ready-ben' });
+    await call(g.ana, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.cal, text: 'ready-cal' });
+    expect((await view(g.ana, g.id)).status).toBe('writing');
+    await call(g.ben, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: 'replacement-one' });
+    const started = await call(g.cal, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: 'replacement-two' });
+    expect(started.data.status).toBe('playing');
     const report = await env.DB.prepare('SELECT reporter, author, text, reason FROM reports').first();
     expect(report).toEqual({ reporter: 'cal@example.com', author: 'ben@example.com', text: line.text, reason: 'mean' });
   });
 
   test('a line reported mid-game shows as removed on the board', async () => {
     const g = await setUp();
-    await call(g.ana, 'POST', `/api/games/${g.id}/start`);
+    await fillAndStart(g);
     const sq = (await view(g.ben, g.id)).boards[g.ids.ana].squares[0];
     const phrase = await env.DB.prepare('SELECT phrase_id FROM squares WHERE id = ?').bind(sq.id).first<{ phrase_id: string }>();
     const author = await env.DB.prepare('SELECT m.email FROM phrases p JOIN members m ON m.id = p.author WHERE p.id = ?').bind(phrase!.phrase_id).first<{ email: string }>();
     const reporter = author!.email === 'ben@example.com' ? g.cal : g.ben;
     const r = await call(reporter, 'POST', `/api/phrases/${phrase!.phrase_id}/report`);
     expect(r.data.boards[g.ids.ana].squares[0].text).toBe('Removed after a report');
+    expect(r.data.boards[g.ids.ana].squares[0].markedAt).not.toBeNull();
+    expect(r.data.boards[g.ids.ana].squares[0].markedBy).toBeNull();
+    expect(r.data.players.find((p: { id: string }) => p.id === g.ids.ana).progress.marked).toBe(1);
+    expect(r.data.scores.every((s: { spotted: number }) => s.spotted === 0)).toBe(true);
     expect(r.text).not.toContain(`"${sq.text}"`); // quoted: "…-1" is also the start of "…-10"
+  });
+
+  test('a reported live square can complete blackout without giving spot credit', async () => {
+    const g = await setUp();
+    await fillAndStart(g);
+    const board = (await view(g.ben, g.id)).boards[g.ids.ana];
+    for (const sq of board.squares.slice(0, 24)) await call(g.ben, 'POST', `/api/squares/${sq.id}/mark`);
+    const last = board.squares[24];
+    const author = await env.DB.prepare('SELECT m.email FROM phrases p JOIN members m ON m.id = p.author WHERE p.id = ?')
+      .bind(last.phraseId).first<{ email: string }>();
+    const reporter = author!.email === 'ben@example.com' ? g.cal : g.ben;
+    const r = await call(reporter, 'POST', `/api/phrases/${last.phraseId}/report`);
+    expect(r.data.players.find((p: { id: string }) => p.id === g.ids.ana).progress.blackoutAt).not.toBeNull();
+    expect(r.data.finishedBoards).toEqual(expect.arrayContaining([expect.objectContaining({ target: g.ids.ana, round: 1 })]));
+    expect(r.data.scores.reduce((sum: number, s: { spotted: number }) => sum + s.spotted, 0)).toBe(24);
+  });
+
+  test('a stalled bingo can retire and carry unheard lines into the next board', async () => {
+    const g = await setUp();
+    await fillAndStart(g);
+    const first = (await view(g.ben, g.id)).boards[g.ids.ana];
+    for (const pos of [0, 1, 2, 3, 4]) await call(g.ben, 'POST', `/api/squares/${first.squares[pos].id}/mark`);
+    expect((await call(g.ben, 'POST', `/api/games/${g.id}/retire`, { target: g.ids.ana })).status).toBe(409);
+
+    await env.DB.prepare('UPDATE boards SET bingo_at = ? WHERE game_id = ? AND target = ?')
+      .bind(Date.now() - 8 * 24 * 60 * 60 * 1000, g.id, g.ids.ana).run();
+    const retired = await call(g.ben, 'POST', `/api/games/${g.id}/retire`, { target: g.ids.ana });
+    expect(retired.status).toBe(200);
+    expect(retired.data.players.find((p: { id: string }) => p.id === g.ids.ana)).toMatchObject({
+      round: 1, needsLines: true, poolCount: 20, progress: null,
+    });
+    expect(retired.data.scores.find((s: { id: string }) => s.id === g.ids.ana)).toMatchObject({ bingos: 1, blackouts: 0 });
+    expect(retired.data.finishedBoards).toHaveLength(0);
+    expect((await call(g.cal, 'POST', `/api/squares/${first.squares[5].id}/mark`)).status).toBe(400);
+
+    const carried = new Set(first.squares.slice(5).map((s) => s.text));
+    for (let i = 0; i < 5; i++) {
+      const r = await call(g.cal, 'POST', `/api/games/${g.id}/phrases`, { target: g.ids.ana, text: `fresh-round-two-${i}` });
+      expect(r.status).toBe(200);
+    }
+    const next = await view(g.ben, g.id);
+    expect(next.players.find((p) => p.id === g.ids.ana)).toMatchObject({ round: 2, needsLines: false, poolCount: 0 });
+    const nextLines = new Set(next.boards[g.ids.ana].squares.map((s) => s.text));
+    for (const line of carried) expect(nextLines.has(line)).toBe(true);
+    for (const line of first.squares.slice(0, 5).map((s) => s.text)) expect(nextLines.has(line)).toBe(false);
+    expect((await view(g.ana, g.id)).myMarks).toEqual(Array(25).fill(false));
   });
 
   test('leaving a game takes you and your board out', async () => {

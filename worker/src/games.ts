@@ -2,7 +2,7 @@
 // and their own board's squares never leave this file, only counts about them do.
 
 import type { Env } from './env';
-import type { Board, GameSummary, GameView, Phrase, Player, Progress, Score, Square } from '../../shared/types';
+import type { ArchivedBoard, Board, FinishedBoard, GameSummary, GameView, Phrase, Player, Progress, Score, Square } from '../../shared/types';
 import { CODE_ALPHABET, MAX_PHRASE, bestLine, deal, freePos, hasBingo, isBlackout, phrasesNeeded, type Size } from '../../shared/logic';
 import { pushTo, type Push } from './push';
 import { NOT_ALLOWED, isHateful } from './filter';
@@ -15,8 +15,8 @@ export class HttpError extends Error {
 
 const MAX_NAME = 40;
 const BOARD_SIZE: Size = 5;
-const MAX_POOL = 60; // phrases per person per game
 const REMOVED = 'Removed after a report';
+const RETIRE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface GameRow { id: string; code: string; name: string; owner: string; status: 'writing' | 'playing'; size: number; created_at: number }
 interface MemberRow { id: string; game_id: string; email: string; joined_at: number }
@@ -62,12 +62,52 @@ export async function createGame(env: Env, email: string, body: { name?: unknown
 
 export async function listGames(env: Env, email: string): Promise<GameSummary[]> {
   const { results } = await env.DB.prepare(
-    `SELECT g.id, g.name, g.code, g.status, g.created_at AS createdAt,
-            (SELECT COUNT(*) FROM members m2 WHERE m2.game_id = g.id) AS players
+    `SELECT g.id, g.name, g.code, g.status, g.size, g.created_at AS createdAt,
+            (SELECT COUNT(*) FROM members m2 WHERE m2.game_id = g.id) AS players,
+            (SELECT COUNT(*) FROM phrases p WHERE p.game_id = g.id AND p.target = m.id AND ${UNUSED}) AS ownPoolCount
        FROM games g JOIN members m ON m.game_id = g.id
       WHERE m.email = ? ORDER BY g.created_at DESC`,
-  ).bind(email).all<GameSummary>();
-  return results;
+  ).bind(email).all<Omit<GameSummary, 'round' | 'progress' | 'myMarks'>>();
+  if (!results.length) return [];
+
+  // The home screen gets only the crossed-off positions on the asker's latest board.
+  // It never receives the board's lines, square ids, or writers.
+  const boardRows = await env.DB.prepare(
+    `SELECT b.game_id AS gameId, b.round, b.bingo_at AS bingoAt, b.blackout_at AS blackoutAt,
+            s.pos, s.free, s.marked_at AS markedAt
+       FROM members m
+       JOIN boards b ON b.game_id = m.game_id AND b.target = m.id
+       LEFT JOIN retired_boards rb ON rb.board_id = b.id
+       JOIN squares s ON s.board_id = b.id
+      WHERE m.email = ?
+        AND b.round = (SELECT MAX(b2.round) FROM boards b2 WHERE b2.game_id = b.game_id AND b2.target = m.id)
+        AND rb.board_id IS NULL
+      ORDER BY b.game_id, s.pos`,
+  ).bind(email).all<{
+    gameId: string; round: number; bingoAt: number | null; blackoutAt: number | null;
+    pos: number; free: number; markedAt: number | null;
+  }>();
+  const byGame = new Map<string, typeof boardRows.results>();
+  for (const row of boardRows.results) (byGame.get(row.gameId) ?? byGame.set(row.gameId, []).get(row.gameId)!).push(row);
+
+  return results.map((game): GameSummary => {
+    const rows = byGame.get(game.id);
+    if (!rows?.length) return { ...game, round: 0, progress: null, myMarks: null };
+    const marks = markedList(rows.map((row) => ({ pos: row.pos, marked_at: row.markedAt })), game.size);
+    return {
+      ...game,
+      round: rows[0].round,
+      myMarks: marks,
+      progress: {
+        marked: rows.filter((row) => row.markedAt && !row.free).length,
+        total: rows.filter((row) => !row.free).length,
+        best: bestLine(marks, game.size),
+        bingoAt: rows[0].bingoAt,
+        blackoutAt: rows[0].blackoutAt,
+        canRetire: !!rows[0].bingoAt && !rows[0].blackoutAt && Date.now() - rows[0].bingoAt >= RETIRE_AFTER_MS,
+      },
+    };
+  });
 }
 
 export async function joinGame(env: Env, email: string, code: string): Promise<{ id: string }> {
@@ -104,6 +144,7 @@ export async function membership(env: Env, gameId: string, email: string): Promi
 interface SquareRow {
   id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null; phrase_id: string | null;
   board_id: string; target: string; round: number; bingo_at: number | null; blackout_at: number | null;
+  retired_at: number | null;
   text: string | null; author: string | null; removed: number | null;
 }
 
@@ -127,8 +168,11 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     game.status === 'playing'
       ? env.DB.prepare(
         `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, s.phrase_id, b.id AS board_id, b.target, b.round, b.bingo_at, b.blackout_at,
+                rb.retired_at,
                 p.text, p.author, p.removed
-           FROM boards b JOIN squares s ON s.board_id = b.id LEFT JOIN phrases p ON p.id = s.phrase_id
+           FROM boards b JOIN squares s ON s.board_id = b.id
+           LEFT JOIN retired_boards rb ON rb.board_id = b.id
+           LEFT JOIN phrases p ON p.id = s.phrase_id
           WHERE b.game_id = ? ORDER BY s.pos`,
       ).bind(gameId).all<SquareRow>()
       : null,
@@ -138,15 +182,21 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
   const poolCount = new Map(counts.results.map((c) => [c.target, c.n]));
 
   // Each person's latest board (highest round); the asker's own is reduced to counts below.
-  const byTarget = new Map<string, SquareRow[]>();
+  const latestByTarget = new Map<string, SquareRow[]>();
   const blackouts = new Map<string, number>();
+  const bingos = new Map<string, number>();
   for (const s of squares?.results ?? []) {
-    const cur = byTarget.get(s.target);
-    if (!cur || cur[0].round < s.round) byTarget.set(s.target, [s]);
+    const cur = latestByTarget.get(s.target);
+    if (!cur || cur[0].round < s.round) latestByTarget.set(s.target, [s]);
     else if (cur[0].round === s.round) cur.push(s);
     if (s.pos === 0 && s.blackout_at) blackouts.set(s.target, (blackouts.get(s.target) ?? 0) + 1);
+    if (s.pos === 0 && s.bingo_at) bingos.set(s.target, (bingos.get(s.target) ?? 0) + 1);
   }
-  const needsLines = (target: string) => game.status === 'playing' && (!byTarget.has(target) || !!byTarget.get(target)![0].blackout_at);
+  const byTarget = new Map([...latestByTarget].filter(([, rows]) => !rows[0].retired_at));
+  const needsLines = (target: string) => {
+    const latest = latestByTarget.get(target)?.[0];
+    return game.status === 'playing' && (!latest || !!latest.blackout_at || !!latest.retired_at);
+  };
 
   const progress = (rows: SquareRow[] | undefined): Progress | null => {
     if (!rows?.length) return null;
@@ -157,6 +207,7 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
       best: bestLine(marked, size),
       bingoAt: rows[0].bingo_at,
       blackoutAt: rows[0].blackout_at,
+      canRetire: !!rows[0].bingo_at && !rows[0].blackout_at && Date.now() - rows[0].bingo_at >= RETIRE_AFTER_MS,
     };
   };
 
@@ -166,8 +217,8 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     isMe: m.id === me.id,
     isOwner: m.id === game.owner,
     poolCount: poolCount.get(m.id) ?? 0,
-    hasBoard: byTarget.has(m.id),
-    round: byTarget.get(m.id)?.[0].round ?? 0,
+    hasBoard: latestByTarget.has(m.id),
+    round: latestByTarget.get(m.id)?.[0].round ?? 0,
     needsLines: needsLines(m.id),
     progress: progress(byTarget.get(m.id)),
   }));
@@ -203,13 +254,31 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     };
   }
 
-  const scores: Score[] = players.map((p) => ({ id: p.id, name: p.name, spotted: 0, written: 0, boards: blackouts.get(p.id) ?? 0 }));
+  const scores: Score[] = players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    bingos: bingos.get(p.id) ?? 0,
+    blackouts: blackouts.get(p.id) ?? 0,
+    spotted: 0,
+    written: 0,
+  }));
   const scoreOf = new Map(scores.map((s) => [s.id, s]));
   for (const s of squares?.results ?? []) {
     if (!s.marked_at || s.free) continue;
     if (s.marked_by) scoreOf.get(s.marked_by) && scoreOf.get(s.marked_by)!.spotted++;
     if (s.author) scoreOf.get(s.author) && scoreOf.get(s.author)!.written++;
   }
+  const finishedBoards: FinishedBoard[] = (squares?.results ?? [])
+    .filter((s) => s.pos === 0 && !!s.blackout_at)
+    .map((s) => ({
+      id: s.board_id,
+      target: s.target,
+      name: names.get(s.target) ?? 'Player',
+      round: s.round,
+      blackoutAt: s.blackout_at!,
+      mine: s.target === me.id,
+    }))
+    .sort((a, b) => b.blackoutAt - a.blackoutAt);
 
   return {
     id: game.id,
@@ -226,6 +295,7 @@ export async function gameView(env: Env, gameId: string, email: string): Promise
     // Where your own board is crossed off, by position only: never the lines themselves.
     myMarks: byTarget.has(me.id) ? markedList(byTarget.get(me.id)!, size) : null,
     scores,
+    finishedBoards,
   };
 }
 
@@ -253,18 +323,26 @@ export async function addPhrase(env: Env, gameId: string, email: string, body: {
   const { results } = await env.DB.prepare(
     `SELECT p.text, ${UNUSED} AS unused FROM phrases p WHERE p.game_id = ? AND p.target = ? AND p.removed = 0`,
   ).bind(gameId, target).all<{ text: string; unused: number }>();
-  if (results.filter((r) => r.unused).length >= MAX_POOL) throw new HttpError(409, 'That list is full');
+  if (results.filter((r) => r.unused).length >= phrasesNeeded(game.size as Size)) throw new HttpError(409, 'That board already has 25 lines');
   if (results.some((r) => r.text.toLowerCase() === text.toLowerCase())) throw new HttpError(409, 'Someone already wrote that one');
-  await env.DB.prepare('INSERT INTO phrases (id, game_id, target, author, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id(), gameId, target, me.id, text, Date.now()).run();
+  // Keep the 25-line cap inside the insert so two simultaneous last lines cannot make 26.
+  const inserted = await env.DB.prepare(
+    `INSERT INTO phrases (id, game_id, target, author, text, created_at)
+     SELECT ?, ?, ?, ?, ?, ?
+      WHERE (SELECT COUNT(*) FROM phrases p WHERE p.game_id = ? AND p.target = ? AND ${UNUSED}) < ?`,
+  ).bind(id(), gameId, target, me.id, text, Date.now(), gameId, target, phrasesNeeded(game.size as Size)).run();
+  if (!inserted.meta.changes) throw new HttpError(409, 'That board already has 25 lines');
   if (game.status === 'playing') await dealNext(env, game, target, later);
+  else await dealFirstBoards(env, game, me.id, later, false);
 }
 
 // Playing, and this person has no board going: none yet (joined late) or their last one blacked out.
 async function waitingForBoard(env: Env, gameId: string, target: string): Promise<boolean> {
-  const latest = await env.DB.prepare('SELECT blackout_at FROM boards WHERE game_id = ? AND target = ? ORDER BY round DESC LIMIT 1')
-    .bind(gameId, target).first<{ blackout_at: number | null }>();
-  return !latest || !!latest.blackout_at;
+  const latest = await env.DB.prepare(
+    `SELECT b.blackout_at, rb.retired_at FROM boards b LEFT JOIN retired_boards rb ON rb.board_id = b.id
+      WHERE b.game_id = ? AND b.target = ? ORDER BY b.round DESC LIMIT 1`,
+  ).bind(gameId, target).first<{ blackout_at: number | null; retired_at: number | null }>();
+  return !latest || !!latest.blackout_at || !!latest.retired_at;
 }
 
 // Rewrite a line you wrote, until it's on a board.
@@ -301,35 +379,56 @@ export async function deletePhrase(env: Env, phraseId: string, email: string): P
 
 export async function startGame(env: Env, gameId: string, email: string, body: { size?: unknown }, later: Later) {
   const { game, me } = await membership(env, gameId, email);
-  if (me.id !== game.owner) throw new HttpError(403, 'Only the person who made the game can deal the boards');
-  if (game.status !== 'writing') throw new HttpError(409, 'The boards have already been dealt');
+  await dealFirstBoards(env, game, me.id, later, true);
+}
+
+// The last line that makes every pool complete deals the first round automatically. The
+// public start route remains as a backwards-compatible fallback for older app builds, and
+// any member may call it: there is no dedicated dealer.
+async function dealFirstBoards(env: Env, game: GameRow, actor: string, later: Later, strict: boolean): Promise<boolean> {
+  if (game.status !== 'writing') {
+    if (strict) throw new HttpError(409, 'The boards have already been dealt');
+    return false;
+  }
   const size = BOARD_SIZE;
 
   const [members, phrases] = await Promise.all([
-    env.DB.prepare('SELECT id, email FROM members WHERE game_id = ?').bind(gameId).all<{ id: string; email: string }>(),
-    env.DB.prepare('SELECT id, target FROM phrases WHERE game_id = ? AND removed = 0').bind(gameId).all<{ id: string; target: string }>(),
+    env.DB.prepare('SELECT id, email FROM members WHERE game_id = ?').bind(game.id).all<{ id: string; email: string }>(),
+    env.DB.prepare('SELECT id, target FROM phrases WHERE game_id = ? AND removed = 0').bind(game.id).all<{ id: string; target: string }>(),
   ]);
-  if (members.results.length < 2) throw new HttpError(409, 'Invite at least one friend first');
+  if (members.results.length < 2) {
+    if (strict) throw new HttpError(409, 'Invite at least one friend first');
+    return false;
+  }
   const needed = phrasesNeeded(size);
   const short = members.results.filter((m) => phrases.results.filter((p) => p.target === m.id).length < needed);
-  if (short.length) throw new HttpError(409, `${short.length === 1 ? 'Someone needs' : `${short.length} people need`} more lines first`);
+  if (short.length) {
+    if (strict) throw new HttpError(409, `${short.length === 1 ? 'Someone needs' : `${short.length} people need`} more lines first`);
+    return false;
+  }
 
   const stmts: D1PreparedStatement[] = [
-    env.DB.prepare('UPDATE games SET status = ?, size = ? WHERE id = ?').bind('playing', size, gameId),
+    env.DB.prepare('UPDATE games SET status = ?, size = ? WHERE id = ?').bind('playing', size, game.id),
   ];
   // boards has UNIQUE (game_id, target, round): if two starts race, the second batch fails whole.
-  for (const m of members.results) stmts.push(...boardStatements(env, gameId, m.id, 1, phrases.results.filter((p) => p.target === m.id), size));
+  for (const m of members.results) stmts.push(...boardStatements(env, game.id, m.id, 1, phrases.results.filter((p) => p.target === m.id), size));
   try {
     await env.DB.batch(stmts);
   } catch (err) {
-    if (String(err).includes('UNIQUE')) throw new HttpError(409, 'The boards have already been dealt');
+    // Two last-line submissions can both notice that every pool is full. The unique board
+    // key makes one batch win; the other quietly returns the already-started game.
+    if (String(err).includes('UNIQUE')) {
+      if (strict) throw new HttpError(409, 'The boards have already been dealt');
+      return false;
+    }
     throw err;
   }
-  later(pushTo(env, members.results.filter((m) => m.id !== me.id).map((m) => m.email), {
+  later(pushTo(env, members.results.filter((m) => m.id !== actor).map((m) => m.email), {
     title: 'Boards are live',
     body: `${game.name}: start listening.`,
-    data: { gameId, url: `/game/${gameId}` },
+    data: { gameId: game.id, url: `/game/${game.id}` },
   }));
+  return true;
 }
 
 // A board about `target`, dealt at random from their unused lines.
@@ -352,9 +451,11 @@ function boardStatements(env: Env, gameId: string, target: string, round: number
 // unused lines about them: someone who joined late, or anyone whose last board blacked out.
 async function dealNext(env: Env, game: GameRow, target: string, later: Later) {
   const size = game.size as Size;
-  const latest = await env.DB.prepare('SELECT round, blackout_at FROM boards WHERE game_id = ? AND target = ? ORDER BY round DESC LIMIT 1')
-    .bind(game.id, target).first<{ round: number; blackout_at: number | null }>();
-  if (latest && !latest.blackout_at) return;
+  const latest = await env.DB.prepare(
+    `SELECT b.round, b.blackout_at, rb.retired_at FROM boards b LEFT JOIN retired_boards rb ON rb.board_id = b.id
+      WHERE b.game_id = ? AND b.target = ? ORDER BY b.round DESC LIMIT 1`,
+  ).bind(game.id, target).first<{ round: number; blackout_at: number | null; retired_at: number | null }>();
+  if (latest && !latest.blackout_at && !latest.retired_at) return;
   const { results: lines } = await env.DB.prepare(`SELECT p.id FROM phrases p WHERE p.game_id = ? AND p.target = ? AND ${UNUSED}`)
     .bind(game.id, target).all<{ id: string }>();
   if (lines.length < phrasesNeeded(size)) return;
@@ -378,6 +479,38 @@ async function dealNext(env: Env, game: GameRow, target: string, later: Later) {
   })());
 }
 
+// After a bingo has stalled for a week, any member may retire it. Unheard lines are copied
+// back into the unused pool; heard lines stay retired with the old board. The board remains
+// private because it never reached blackout.
+export async function retireBoard(env: Env, gameId: string, email: string, body: { target?: unknown }): Promise<{ gameId: string }> {
+  const { game } = await membership(env, gameId, email);
+  const target = String(body.target ?? '');
+  const board = await env.DB.prepare(
+    `SELECT b.id, b.bingo_at, b.blackout_at, rb.retired_at
+       FROM boards b LEFT JOIN retired_boards rb ON rb.board_id = b.id
+      WHERE b.game_id = ? AND b.target = ? ORDER BY b.round DESC LIMIT 1`,
+  ).bind(game.id, target).first<{ id: string; bingo_at: number | null; blackout_at: number | null; retired_at: number | null }>();
+  if (!board) throw new HttpError(404, 'Board not found');
+  if (board.retired_at) throw new HttpError(409, 'That board has already been retired');
+  if (board.blackout_at) throw new HttpError(409, 'That board is already complete');
+  if (!board.bingo_at) throw new HttpError(409, 'A board needs bingo before it can be retired');
+  if (Date.now() - board.bingo_at < RETIRE_AFTER_MS) throw new HttpError(409, 'A board can be retired seven days after bingo');
+
+  const { results: unheard } = await env.DB.prepare(
+    `SELECT p.id FROM squares s JOIN phrases p ON p.id = s.phrase_id
+      WHERE s.board_id = ? AND s.marked_at IS NULL AND p.removed = 0`,
+  ).bind(board.id).all<{ id: string }>();
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO retired_boards (board_id, retired_at) VALUES (?, ?)').bind(board.id, now),
+    ...unheard.map((phrase, index) => env.DB.prepare(
+      `INSERT INTO phrases (id, game_id, target, author, text, created_at)
+       SELECT ?, game_id, target, author, text, ? FROM phrases WHERE id = ? AND removed = 0`,
+    ).bind(id(), now + index, phrase.id)),
+  ]);
+  return { gameId: game.id };
+}
+
 function secureRandom(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
 }
@@ -389,16 +522,19 @@ function secureRandom(): number {
 // recorded only the first time (conditional updates), so each is announced exactly once.
 export async function setMark(env: Env, squareId: string, email: string, on: boolean, later: Later): Promise<{ gameId: string }> {
   const sq = await env.DB.prepare(
-    `SELECT s.free, b.id AS board_id, b.target, b.game_id, b.blackout_at FROM squares s JOIN boards b ON b.id = s.board_id WHERE s.id = ?`,
-  ).bind(squareId).first<{ free: number; board_id: string; target: string; game_id: string; blackout_at: number | null }>();
+    `SELECT s.free, s.marked_by, b.id AS board_id, b.target, b.game_id, b.blackout_at, rb.retired_at
+       FROM squares s JOIN boards b ON b.id = s.board_id LEFT JOIN retired_boards rb ON rb.board_id = b.id WHERE s.id = ?`,
+  ).bind(squareId).first<{ free: number; marked_by: string | null; board_id: string; target: string; game_id: string; blackout_at: number | null; retired_at: number | null }>();
   if (!sq) throw new HttpError(404, 'Not found');
   const { game, me } = await membership(env, sq.game_id, email);
   if (sq.target === me.id) throw new HttpError(404, 'Not found'); // your own board doesn't exist, as far as you know
   if (sq.free) throw new HttpError(400, 'That’s the free square');
   if (sq.blackout_at) throw new HttpError(400, 'That board is blacked out, so it’s done'); // writers are revealed; no going back
+  if (sq.retired_at) throw new HttpError(400, 'That board has been retired');
   const now = Date.now();
 
   if (!on) {
+    if (sq.marked_by !== me.id) throw new HttpError(403, 'Only the person who spotted this can undo it');
     await env.DB.prepare('UPDATE squares SET marked_by = NULL, marked_at = NULL WHERE id = ? AND free = 0').bind(squareId).run();
     return { gameId: game.id };
   }
@@ -477,6 +613,48 @@ export async function ownBoard(env: Env, gameId: string, email: string): Promise
   };
 }
 
+// Any member can revisit a blacked-out board. Before blackout this deliberately returns
+// nothing, including for the person the board is about.
+export async function archivedBoard(env: Env, boardId: string, email: string): Promise<ArchivedBoard> {
+  const board = await env.DB.prepare(
+    `SELECT b.id, b.game_id, b.target, b.round, b.bingo_at, b.blackout_at, u.name
+       FROM boards b
+       JOIN members viewer ON viewer.game_id = b.game_id AND viewer.email = ?
+       JOIN members target ON target.id = b.target
+       LEFT JOIN users u ON u.email = target.email
+      WHERE b.id = ? AND b.blackout_at IS NOT NULL`,
+  ).bind(email, boardId).first<{ id: string; game_id: string; target: string; round: number; bingo_at: number | null; blackout_at: number; name: string | null }>();
+  if (!board) throw new HttpError(404, 'Finished board not found');
+  const { results: members } = await env.DB.prepare(
+    'SELECT m.id, u.name FROM members m LEFT JOIN users u ON u.email = m.email WHERE m.game_id = ?',
+  ).bind(board.game_id).all<{ id: string; name: string | null }>();
+  const names = new Map(members.map((m, i) => [m.id, m.name || `Player ${i + 1}`]));
+  const { results } = await env.DB.prepare(
+    `SELECT s.id, s.pos, s.free, s.marked_by, s.marked_at, s.phrase_id, p.text, p.author, p.removed
+       FROM squares s LEFT JOIN phrases p ON p.id = s.phrase_id WHERE s.board_id = ? ORDER BY s.pos`,
+  ).bind(board.id).all<{ id: string; pos: number; free: number; marked_by: string | null; marked_at: number | null; phrase_id: string | null; text: string | null; author: string | null; removed: number | null }>();
+  return {
+    id: board.id,
+    target: board.target,
+    name: board.name || names.get(board.target) || 'Player',
+    round: board.round,
+    bingoAt: board.bingo_at,
+    blackoutAt: board.blackout_at,
+    squares: results.map((r) => ({
+      id: r.id,
+      pos: r.pos,
+      text: r.free ? null : r.removed ? REMOVED : r.text,
+      phraseId: null,
+      free: !!r.free,
+      markedAt: r.marked_at,
+      markedBy: r.marked_by ? names.get(r.marked_by) ?? null : null,
+      markedById: r.marked_by,
+      markedByMe: false,
+      writer: r.author ? names.get(r.author) ?? null : null,
+    })),
+  };
+}
+
 // ---------- account deletion ----------
 
 // Statements that take one member out of their game. Their own pool and board go; lines
@@ -485,6 +663,7 @@ export async function ownBoard(env: Env, gameId: string, email: string): Promise
 // in is deleted.
 export function leaveStatements(env: Env, m: { id: string; game_id: string }): D1PreparedStatement[] {
   return [
+    env.DB.prepare('DELETE FROM retired_boards WHERE board_id IN (SELECT id FROM boards WHERE target = ?)').bind(m.id),
     env.DB.prepare('DELETE FROM squares WHERE board_id IN (SELECT id FROM boards WHERE target = ?)').bind(m.id),
     env.DB.prepare('DELETE FROM boards WHERE target = ?').bind(m.id),
     env.DB.prepare('DELETE FROM phrases WHERE target = ?').bind(m.id),
@@ -496,6 +675,7 @@ export function leaveStatements(env: Env, m: { id: string; game_id: string }): D
         WHERE id = ?1 AND owner = ?2`,
     ).bind(m.game_id, m.id),
     env.DB.prepare('DELETE FROM squares WHERE board_id IN (SELECT id FROM boards WHERE game_id = ?1) AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
+    env.DB.prepare('DELETE FROM retired_boards WHERE board_id IN (SELECT id FROM boards WHERE game_id = ?1) AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
     env.DB.prepare('DELETE FROM boards WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
     env.DB.prepare('DELETE FROM phrases WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),
     env.DB.prepare('DELETE FROM bans WHERE game_id = ?1 AND NOT EXISTS (SELECT 1 FROM members WHERE game_id = ?1)').bind(m.game_id),

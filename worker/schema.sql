@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- A group of friends. status: 'writing' (filling in pools) → 'playing' (boards dealt).
--- owner is a members.id (the person who can deal the boards).
+-- owner is a members.id (the person who can remove members from the game).
 CREATE TABLE IF NOT EXISTS games (
   id         TEXT    PRIMARY KEY,
   code       TEXT    NOT NULL UNIQUE,
@@ -64,6 +64,13 @@ CREATE TABLE IF NOT EXISTS boards (
   bingo_at    INTEGER,
   blackout_at INTEGER,
   UNIQUE (game_id, target, round)
+);
+
+-- A bingo board may be retired after it stalls. Its unheard lines are copied back into
+-- the next pool; the retired board itself stays private and is never counted as a blackout.
+CREATE TABLE IF NOT EXISTS retired_boards (
+  board_id   TEXT PRIMARY KEY,
+  retired_at INTEGER NOT NULL
 );
 
 -- The squares of a board. marked_at is set when crossed off; the free square starts

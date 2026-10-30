@@ -9,11 +9,16 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <StatusBar style="dark" />
+        <ThemedStatusBar />
         <Navigation />
       </AuthProvider>
     </ThemeProvider>
   );
+}
+
+function ThemedStatusBar() {
+  const { t } = useTheme();
+  return <StatusBar style={t.name === 'dark' ? 'light' : 'dark'} />;
 }
 
 function Navigation() {
@@ -43,7 +48,7 @@ function Navigation() {
         <Stack.Screen name="name" options={{ title: 'Your name', headerBackVisible: false }} />
       </Stack.Protected>
       <Stack.Protected guard={signedIn && !needsName}>
-        <Stack.Screen name="index" options={{ title: 'Bingo' }} />
+        <Stack.Screen name="index" options={{ title: 'Quote Bingo' }} />
         <Stack.Screen name="new" options={{ title: 'New game', presentation: 'modal' }} />
         <Stack.Screen name="join/index" options={{ title: 'Join a game', presentation: 'modal' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
@@ -51,6 +56,7 @@ function Navigation() {
         <Stack.Screen name="game/[id]/write/[target]" options={{ title: '' }} />
         <Stack.Screen name="game/[id]/board/[target]" options={{ title: '' }} />
         <Stack.Screen name="game/[id]/mine" options={{ title: 'Your board' }} />
+        <Stack.Screen name="game/[id]/history/[board]" options={{ title: 'Finished board' }} />
         <Stack.Screen name="game/[id]/players" options={{ title: 'People' }} />
       </Stack.Protected>
       {/* Invite links open here signed in or not; the screen offers sign-in itself. */}

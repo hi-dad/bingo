@@ -2,7 +2,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 // Line icons drawn with react-native-svg (already in the app), so there's no icon font to
 // load. Shapes follow the 24×24 outline style of the Lucide set.
-export type IconName = 'settings' | 'pencil' | 'trash' | 'x';
+export type IconName = 'settings' | 'invite' | 'pencil' | 'trash' | 'x';
 
 export function Icon({ name, size = 20, color }: { name: IconName; size?: number; color: string }) {
   const p = { stroke: color, strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
@@ -18,6 +18,12 @@ export function Icon({ name, size = 20, color }: { name: IconName; size?: number
         <>
           <Path {...p} d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z" />
           <Path {...p} d="m15 5 4 4" />
+        </>
+      ) : null}
+      {name === 'invite' ? (
+        <>
+          <Circle {...p} cx={9} cy={8} r={4} />
+          <Path {...p} d="M2 21a7 7 0 0 1 14 0M19 8v6M16 11h6" />
         </>
       ) : null}
       {name === 'trash' ? (

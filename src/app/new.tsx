@@ -25,7 +25,7 @@ export default function NewGame() {
     <ScrollView style={ui.screen} contentContainerStyle={ui.content} keyboardShouldPersistTaps="handled">
       <Heading>What’s the occasion?</Heading>
       <Field value={name} onChangeText={setName} placeholder="Lake trip, Roommates, Thanksgiving…" autoFocus maxLength={40} />
-      <Muted>Boards are 5×5, so each person needs 25 lines written about them before the deal.</Muted>
+      <Muted>Boards are 5×5. The game starts automatically once everyone has 25 lines.</Muted>
       <ErrorText>{error}</ErrorText>
       <Button title="Create game" disabled={!name.trim()} busy={busy} onPress={create} />
     </ScrollView>

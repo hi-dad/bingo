@@ -2,13 +2,13 @@
 // leave a game, the owner removes someone, and blocking. The word filter is in filter.ts.
 
 import type { Env } from './env';
-import { HttpError, leaveStatements, membership } from './games';
+import { HttpError, leaveStatements, membership, setMark, type Later } from './games';
 
 const MAX_REASON = 200;
 
 // Anyone who can see a line can report it. It's hidden at once, everywhere (pools and
 // boards), and the report is kept for review.
-export async function reportPhrase(env: Env, phraseId: string, email: string, body: { reason?: unknown }): Promise<{ gameId: string }> {
+export async function reportPhrase(env: Env, phraseId: string, email: string, body: { reason?: unknown }, later: Later): Promise<{ gameId: string }> {
   const phrase = await env.DB.prepare(
     `SELECT p.game_id, p.target, p.text, p.removed, m.email AS author_email
        FROM phrases p LEFT JOIN members m ON m.id = p.author WHERE p.id = ?`,
@@ -19,12 +19,30 @@ export async function reportPhrase(env: Env, phraseId: string, email: string, bo
   if (phrase.author_email === email) throw new HttpError(400, 'That’s your own line. Delete it instead.');
   if (phrase.removed) return { gameId: phrase.game_id };
   const reason = String(body.reason ?? '').trim().slice(0, MAX_REASON) || null;
+  const square = await env.DB.prepare(
+    `SELECT s.id, s.marked_at FROM squares s JOIN boards b ON b.id = s.board_id
+      LEFT JOIN retired_boards rb ON rb.board_id = b.id
+      WHERE s.phrase_id = ? AND b.blackout_at IS NULL AND rb.board_id IS NULL LIMIT 1`,
+  ).bind(phraseId).first<{ id: string; marked_at: number | null }>();
   await env.DB.batch([
     env.DB.prepare('UPDATE phrases SET removed = 1 WHERE id = ?').bind(phraseId),
     env.DB.prepare(
       'INSERT INTO reports (id, phrase_id, game_id, reporter, author, text, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(crypto.randomUUID(), phraseId, phrase.game_id, email, phrase.author_email, phrase.text, reason, Date.now()),
   ]);
+  // A removed live square cannot be heard later. Count it as complete without awarding a
+  // spot, so a report can never make blackout impossible.
+  if (square) {
+    if (!square.marked_at) {
+      try {
+        await setMark(env, square.id, email, true, later);
+      } catch (err) {
+        // Another player may have completed the board between our lookup and this call.
+        if (!(err instanceof HttpError) || err.status !== 400) throw err;
+      }
+    }
+    await env.DB.prepare('UPDATE squares SET marked_by = NULL WHERE id = ?').bind(square.id).run();
+  }
   return { gameId: phrase.game_id };
 }
 

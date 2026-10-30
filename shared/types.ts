@@ -10,8 +10,13 @@ export interface GameSummary {
   name: string;
   code: string;
   status: GameStatus;
+  size: Size;
   players: number;
+  ownPoolCount: number; // safe count only: how many unused lines exist about the asker
   createdAt: number;
+  round: number;
+  progress: Progress | null;
+  myMarks: boolean[] | null; // positions only; the lines on your own board remain secret
 }
 
 // How far along a board is. `marked` and `total` leave out the free square.
@@ -21,6 +26,7 @@ export interface Progress {
   best: number; // most squares crossed off in one line (size = bingo)
   bingoAt: number | null;
   blackoutAt: number | null;
+  canRetire: boolean; // bingo was at least seven days ago and the board has not blacked out
 }
 
 export interface Player {
@@ -61,12 +67,28 @@ export interface Board {
   blackoutAt: number | null;
 }
 
+export interface FinishedBoard {
+  id: string;
+  target: string;
+  name: string;
+  round: number;
+  blackoutAt: number;
+  mine: boolean;
+}
+
+export interface ArchivedBoard extends Board {
+  id: string;
+  name: string;
+  round: number;
+}
+
 export interface Score {
   id: string;
   name: string;
+  bingos: number; // boards about them that reached bingo
+  blackouts: number; // boards about them that fully blacked out
   spotted: number; // squares they crossed off
   written: number; // their phrases that got crossed off
-  boards: number; // boards about them that blacked out
 }
 
 export interface GameView {
@@ -83,4 +105,5 @@ export interface GameView {
   boards: Record<string, Board>; // everyone's latest board except yours
   myMarks: boolean[] | null; // which spots on your latest board are crossed off, by position; never what they say
   scores: Score[];
+  finishedBoards: FinishedBoard[]; // blacked-out rounds only; their contents are safe to reveal
 }

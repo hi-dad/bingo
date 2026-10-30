@@ -22,17 +22,20 @@ export function BingoGrid({ size, squares, pending = {}, onToggle, onLongPress, 
     <View style={s.grid}>
       {[...squares].sort((a, b) => a.pos - b.pos).map((sq) => {
         const marked = pending[sq.id] ?? !!sq.markedAt;
+        const isPending = Object.prototype.hasOwnProperty.call(pending, sq.id);
+        const lockedBySomeoneElse = marked && !sq.markedByMe;
+        const disabled = !onToggle || sq.free || isPending || lockedBySomeoneElse;
         const by = marked && !sq.free ? (pending[sq.id] && !sq.markedAt ? null : sq.markedBy) : null;
         return (
           <View key={sq.id} style={{ width: `${100 / size}%`, aspectRatio: 1, padding: 3.5 }}>
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ checked: marked, disabled: !onToggle || sq.free }}
+              accessibilityState={{ checked: marked, disabled }}
               accessibilityLabel={sq.free ? 'Free square' : `${sq.text}${marked ? `, crossed off${by ? ` by ${by}` : ''}` : ''}`}
-              disabled={!onToggle || sq.free}
+              disabled={disabled}
               onPress={() => onToggle?.(sq, !marked)}
               onLongPress={onLongPress && sq.phraseId ? () => onLongPress(sq) : undefined}
-              accessibilityHint={onLongPress && sq.phraseId ? 'Press and hold to report this line' : undefined}
+              accessibilityHint={lockedBySomeoneElse ? 'Crossed off by another player' : onLongPress && sq.phraseId ? 'Press and hold to report this line' : undefined}
               style={({ pressed }) => [
                 s.square,
                 marked && !sq.free && s.marked,

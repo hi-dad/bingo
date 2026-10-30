@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
@@ -45,20 +45,29 @@ export default function WriteAbout() {
 
   if (!game) return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={t.strong} />}</View>;
   const person = game.players.find((p) => p.id === target);
+  if (!person) return <View style={[ui.screen, ui.content]}><ErrorText>This person is no longer in the game.</ErrorText><Button kind="secondary" title="Back to game" onPress={() => router.replace(`/game/${id}`)} /></View>;
   const pool = game.pools[target] ?? [];
   // Writing is open before the deal, and later while they wait for their next board.
   const writing = game.status === 'writing' || !!person?.needsLines;
+  const canAdd = pool.length < game.needed;
 
   // Adds a new line, or saves the one being edited.
   async function add() {
     const line = text.trim();
     if (!line) return;
+    const currentStatus = game!.status;
+    const wasWaitingForBoard = !!person?.needsLines;
     setBusy(true);
     try {
-      await act(() => (editing ? api.editPhrase(editing, line) : api.addPhrase(id, target, line)));
+      const next = await act(() => (editing ? api.editPhrase(editing, line) : api.addPhrase(id, target, line)));
       setText('');
       setEditing(null);
       setProblem(null);
+      const nextPerson = next?.players.find((p) => p.id === target);
+      if (!editing && next && (next.status !== currentStatus || (wasWaitingForBoard && !nextPerson?.needsLines))) {
+        router.replace({ pathname: '/game/[id]', params: { id, dealt: '1' } });
+        return;
+      }
     } catch (err) {
       setProblem((err as Error).message);
     } finally {
@@ -120,7 +129,7 @@ export default function WriteAbout() {
           </Pressable>
         )}
       />
-      {writing ? (
+      {writing && (canAdd || editing) ? (
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           <ErrorText>{problem}</ErrorText>
           {editing ? (
@@ -144,6 +153,11 @@ export default function WriteAbout() {
             <Button title={editing ? 'Save' : 'Add'} busy={busy} disabled={!text.trim()} onPress={add} style={{ minWidth: 76 }} />
           </View>
         </View>
+      ) : writing ? (
+        <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <Text style={styles.complete}>Complete</Text>
+          <Muted>25/25 lines added. You can still edit or delete lines you wrote while everyone else finishes.</Muted>
+        </View>
       ) : (
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           <Muted>{person?.name}’s board is in play. You can write more once it’s blacked out.</Muted>
@@ -165,6 +179,7 @@ const useStyles = makeStyles((t) => ({
   tools: { flexDirection: 'row', gap: 16, alignItems: 'center' },
   editBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   editLabel: { fontSize: 13, fontWeight: '700', color: t.strong },
+  complete: { fontSize: 16, fontWeight: '900', color: t.strong },
   composer: { paddingHorizontal: 16, paddingTop: 10, gap: 6, borderTopWidth: 1, borderTopColor: t.line, backgroundColor: t.bg },
   inputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
 }));

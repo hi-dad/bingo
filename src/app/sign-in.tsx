@@ -1,11 +1,10 @@
-import { KeyboardAvoidingView, Linking, Platform, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { SignInButtons } from '@/components/SignInButtons';
 import { Muted, useUi } from '@/components/ui';
-import { API_URL } from '@/config';
 import { makeStyles, radius, shadow } from '@/theme';
 
-const PREVIEW = ['“Literally”', 'Mentions the gym', 'Says “iconic”', 'Late again', '“No because…”', 'Brings up the ex'];
+const PREVIEW = ['“Literally”', 'Mentions the gym', 'Says “iconic”', 'Late again', '“6 7”', 'Brings up the ex'];
 
 export default function SignIn() {
   const ui = useUi();
@@ -21,16 +20,11 @@ export default function SignIn() {
               </View>
             ))}
           </View>
-          <Text style={s.title}>Bingo</Text>
-          <Muted style={s.tag}>Make bingo boards of the things your friends always say. Everyone sees every board but their own.</Muted>
+          <Text style={s.title}>Quote Bingo</Text>
+          <Muted style={s.tag}>Make bingo boards of the things your friends say</Muted>
         </View>
         <View style={{ gap: 12 }}>
           <SignInButtons />
-          <Text style={s.terms}>
-            By continuing you agree to the{' '}
-            <Text style={s.link} onPress={() => Linking.openURL(`${API_URL}/terms`)}>terms</Text>
-            : no hateful or hurtful lines.
-          </Text>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -47,6 +41,4 @@ const useStyles = makeStyles((t) => ({
   tileOnText: { color: t.accentInk },
   title: { fontSize: 44, fontWeight: '900', color: t.ink, marginTop: 12, letterSpacing: -1 },
   tag: { textAlign: 'center', fontSize: 17, maxWidth: 320 },
-  terms: { textAlign: 'center', fontSize: 13, color: t.muted },
-  link: { color: t.strong, fontWeight: '700', textDecorationLine: 'underline' },
 }));

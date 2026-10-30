@@ -13,10 +13,12 @@
 //   POST   /api/games              -> { name, size } create; returns { id }
 //   POST   /api/join/:code         -> join; returns { id }
 //   GET    /api/games/:id          -> GameView (built for the person asking)
-//   POST   /api/games/:id/phrases  -> { target, text } add a line to a friend's pool; returns GameView
-//   POST   /api/games/:id/start    -> { size? } deal the boards; returns GameView
-//   GET    /api/games/:id/mine     -> your own board, once it's blacked out
+//   POST   /api/games/:id/phrases  -> { target, text } add a line; auto-deals when everyone reaches 25
+//   POST   /api/games/:id/start    -> backwards-compatible manual deal fallback; returns GameView
+//   GET    /api/games/:id/mine     -> your own latest board, once it's blacked out
+//   GET    /api/boards/:id         -> any blacked-out board in one of your games
 //   POST   /api/games/:id/leave    -> leave the game
+//   POST   /api/games/:id/retire   -> { target } retire a stalled bingo and carry unheard lines forward
 //   POST   /api/games/:id/remove   -> { player } owner only: remove someone for good; returns GameView
 //   POST   /api/games/:id/block    -> { player } block them (and leave this game)
 //   GET    /api/blocks             -> [{ id, name }] people you've blocked
@@ -32,7 +34,7 @@
 
 import type { Env } from './env';
 import { verifySignIn, createSession, sessionEmail, endSession, saveName, nameOf, cleanName } from './auth';
-import { HttpError, addPhrase, createGame, deleteAccount, deletePhrase, editPhrase, gameView, joinGame, listGames, ownBoard, setMark, startGame, type Later } from './games';
+import { HttpError, addPhrase, archivedBoard, createGame, deleteAccount, deletePhrase, editPhrase, gameView, joinGame, listGames, ownBoard, retireBoard, setMark, startGame, type Later } from './games';
 import { EXPO_TOKEN } from './push';
 import { isHateful, NOT_ALLOWED } from './filter';
 import { blockPlayer, leaveGame, listBlocks, removePlayer, reportPhrase, unblock } from './safety';
@@ -152,6 +154,10 @@ async function api(request: Request, env: Env, path: string, email: string, late
       await leaveGame(env, id, email);
       return json({ ok: true });
     }
+    if (action === 'retire' && method === 'POST') {
+      const { gameId } = await retireBoard(env, id, email, await readJson(request));
+      return json(await gameView(env, gameId, email));
+    }
     if (action === 'remove' && method === 'POST') {
       await removePlayer(env, id, email, await readJson(request));
       return json(await gameView(env, id, email));
@@ -163,9 +169,11 @@ async function api(request: Request, env: Env, path: string, email: string, late
   }
 
   if (kind === 'phrases' && id && action === 'report' && method === 'POST') {
-    const { gameId } = await reportPhrase(env, id, email, await readJson(request));
+    const { gameId } = await reportPhrase(env, id, email, await readJson(request), later);
     return json(await gameView(env, gameId, email));
   }
+
+  if (kind === 'boards' && id && !action && method === 'GET') return json(await archivedBoard(env, id, email));
 
   if (kind === 'blocks' && !id && method === 'GET') return json(await listBlocks(env, email));
   if (kind === 'blocks' && id && !action && method === 'DELETE') {
@@ -214,10 +222,10 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 
 // The App Store asks for a privacy policy URL.
 const PRIVACY = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bingo privacy</title>
+<title>Quote Bingo privacy</title>
 <style>body{font:17px/1.5 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;color:#1F1B16;background:#FFF8EF}</style>
 <h1>Privacy</h1>
-<p>Bingo stores only what the game needs:</p>
+<p>Quote Bingo stores only what the game needs:</p>
 <ul>
 <li>Your email address and first name, from Sign in with Apple or Google. Your email is never shown to other players; your first name is.</li>
 <li>The games you join, the lines you write about friends, and the squares you cross off.</li>
@@ -229,10 +237,10 @@ const PRIVACY = `<!doctype html><meta charset="utf-8"><meta name="viewport" cont
 
 // App Store rule 1.2: terms everyone agrees to, with no tolerance for abuse.
 const TERMS = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bingo terms</title>
+<title>Quote Bingo terms</title>
 <style>body{font:17px/1.5 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;color:#1F1B16;background:#FFF8EF}</style>
 <h1>Terms</h1>
-<p>Bingo is for laughing with your friends, not at them. By using it you agree:</p>
+<p>Quote Bingo is for laughing with your friends, not at them. By using it you agree:</p>
 <ul>
 <li>No hateful, harassing, sexual or threatening lines, and nothing about someone's race, religion, gender, sexuality, disability or body meant to hurt.</li>
 <li>Only play with people who know they're playing.</li>

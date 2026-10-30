@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { ScrollView } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { api } from '@/api';
 import { useAuth } from '@/auth';
 import { Button, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui';
 
@@ -7,6 +9,7 @@ import { Button, ErrorText, Field, Heading, Muted, useUi } from '@/components/ui
 export default function Name() {
   const ui = useUi();
   const auth = useAuth();
+  const { invite } = useLocalSearchParams<{ invite?: string }>();
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +17,9 @@ export default function Name() {
   async function save() {
     setBusy(true);
     try {
+      const joined = invite ? await api.join(invite.toUpperCase()) : null;
       await auth.setName(name.trim());
+      if (joined) router.replace(`/game/${joined.id}`);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);

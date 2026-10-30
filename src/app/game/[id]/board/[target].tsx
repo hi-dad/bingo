@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, View } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { api } from '@/api';
 import { useGame } from '@/useGame';
@@ -11,7 +11,7 @@ import { BingoGrid } from '@/components/BingoGrid';
 import { Confetti } from '@/components/Confetti';
 import { progressLine } from '@/components/ProgressCard';
 import { ProgressRing } from '@/components/ProgressRing';
-import { ErrorText, Muted, useUi } from '@/components/ui';
+import { Button, ErrorText, Muted, useUi } from '@/components/ui';
 import { makeStyles, useTheme } from '@/theme';
 
 export default function BoardScreen() {
@@ -22,6 +22,7 @@ export default function BoardScreen() {
   const { game, error, refreshing, refresh, act } = useGame(id);
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [burst, setBurst] = useState<number | null>(null);
+  const [retiring, setRetiring] = useState(false);
   const board = game?.boards[target];
   const person = game?.players.find((p) => p.id === target);
 
@@ -38,8 +39,11 @@ export default function BoardScreen() {
     seen.current = { bingo: board.bingoAt, blackout: board.blackoutAt };
   }, [board?.bingoAt, board?.blackoutAt]);
 
-  if (!game || !board || !person?.progress) {
+  if (!game) {
     return <View style={[ui.screen, ui.content]}>{error ? <ErrorText>{error}</ErrorText> : <ActivityIndicator color={t.strong} />}</View>;
+  }
+  if (!board || !person?.progress) {
+    return <View style={[ui.screen, ui.content]}><ErrorText>This board is no longer available.</ErrorText><Button kind="secondary" title="Back to game" onPress={() => router.replace(`/game/${id}`)} /></View>;
   }
 
   async function toggle(square: Square, on: boolean) {
@@ -52,6 +56,28 @@ export default function BoardScreen() {
     } finally {
       setPending(({ [square.id]: _, ...rest }) => rest);
     }
+  }
+
+  function retire() {
+    Alert.alert(
+      `Retire ${person!.name}’s board?`,
+      'Lines nobody heard will carry into their next board. Lines already spotted retire with this one, and the writers stay secret.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Retire board', style: 'destructive', onPress: async () => {
+            setRetiring(true);
+            try {
+              await act(() => api.retire(id, target));
+              router.replace(`/game/${id}`);
+            } catch (err) {
+              Alert.alert('Couldn’t retire board', (err as Error).message);
+              setRetiring(false);
+            }
+          },
+        },
+      ],
+    );
   }
 
   const index = playerIndex(game);
@@ -73,9 +99,8 @@ export default function BoardScreen() {
         <ErrorText>{error}</ErrorText>
         <BingoGrid size={game.size} squares={board.squares} pending={pending} onToggle={board.blackoutAt ? undefined : toggle} playerIndex={index}
           onLongPress={(sq) => sq.phraseId && sq.text && confirmReport(sq.text, () => act(() => api.report(sq.phraseId!)))} />
-        <Muted style={{ textAlign: 'center', fontSize: 13 }}>
-          {board.blackoutAt ? 'Names on top show who wrote each line.' : `Tap when ${person.name} says it.`}
-        </Muted>
+        {!board.blackoutAt ? <Muted style={{ textAlign: 'center', fontSize: 13 }}>Tap when {person.name} says it.</Muted> : null}
+        {progress.canRetire ? <Button kind="secondary" title="Retire stalled board" busy={retiring} onPress={retire} /> : null}
       </ScrollView>
       <Confetti burst={burst} />
     </View>
